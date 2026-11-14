@@ -14,6 +14,3 @@ cantera
 pyturbo-aero
 splipy
 gmsh
-
-# Installed directly from GitHub (not on PyPI)
-git+https://github.com
