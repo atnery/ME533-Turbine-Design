@@ -9,8 +9,3 @@ pyvista
 # Thermodynamics & gas properties
 CoolProp
 cantera
-
-# Blade geometry, aerodynamics & meshing
-pyturbo-aero
-splipy
-gmsh
