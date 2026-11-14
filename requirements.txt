@@ -1,4 +1,19 @@
+# Core scientific & plotting stack
 numpy
+scipy
+pandas
+matplotlib
 plotly
-CoolProp
+pyvista
 
+# Thermodynamics & gas properties
+CoolProp
+cantera
+
+# Blade geometry, aerodynamics & meshing
+pyturbo-aero
+splipy
+gmsh
+
+# Installed directly from GitHub (not on PyPI)
+git+https://github.com
