@@ -1,5 +1,6 @@
 # Library imports
 
+import traceback
 import numpy as np
 from CoolProp.CoolProp import PropsSI
 from KO_losses import ko_losses
@@ -8,6 +9,12 @@ MAX_ITER = 100      # Max iterations for BOTH loops
 TOL_P3 = 1e-4       # Relative tolerance on exit static pressure match (outer loop)
 TOL_P2 = 1e-6       # Relative tolerance on stator exit pressure (inner loop)
 
+# Order of the values returned by single_stage_turbine (last entry is the full results dict)
+OUTPUT_NAMES = ["T03", "P03", "eta_tt", "eta_ts", "W", "A2", "A3", "h2", "h3",
+                "Y_s", "Y_r", "alpha2", "beta2", "beta3",
+                "M2", "M2R", "M3", "M3R",
+                "P2", "T2", "T3", "P02", "T02", "alpha3", "sol"]
+
 # Blade geometry NOT supplied by the caller is derived from these ratios (preliminary design values)
 DEFAULT_GEOM = dict(
     h_over_c=1.5,           # blade height / chord
@@ -15,10 +22,12 @@ DEFAULT_GEOM = dict(
     ax_over_c=0.80,         # axial chord / chord
     clearance_over_h=0.015, # rotor tip clearance / blade height
     shrouded=False,         # rotor shroud
+    te_over_o=0.05,         # trailing-edge thickness / throat opening (t/o), valid 0-0.4  <-- placeholder, set yours
 )
 
-# Coefficients from Kacker Okappu (1994) for loss correlations. These are the default values used in the original KO paper.
-DEFAULT_E = [0.5, 0.5, 0.1, 0.1, 0.1]   # [YpReaction, YpImpulse, fHub, dPhi2Reaction, dPhi2Impulse] (your placeholders)
+# E is now ONLY fHub (hub-to-tip Mach correction used in the KO shock-loss term). A single number, not a list.
+# The profile (Aungier fits) and trailing-edge (t/o) coefficients are now computed inside ko_losses.
+DEFAULT_E = 1.0   # fHub  <-- placeholder, set yours
 DEFAULT_LOSSES = [1, 2, 3, 4] # Consider all losses by default: 1 profile, 2 secondary, 3 tip clearance, 4 trailing edge
 
 
@@ -31,7 +40,7 @@ def _ko_Y(row, V_in, ang_in, V_out, ang_out, P0_in, P_in, P0_out, P_out,
     chord = height / geom['h_over_c']
     V = [V_in, ang_in, P0_in, P_in, V_out, ang_out, P0_out, P_out]
     G = [chord, geom['tmax_over_c'] * chord, r_hub, r_tip,
-         geom['ax_over_c'] * chord, height, geom['clearance_over_h'] * height]
+         geom['ax_over_c'] * chord, height, geom['clearance_over_h'] * height, geom['te_over_o']]
     F = [np.sqrt(gamma * R * T_in), np.sqrt(gamma * R * T_out), rho_out, mu_out, gamma]
     B = [row, geom['shrouded']]
     return float(ko_losses(V, G, F, B, E, loss_select)[0])
@@ -133,14 +142,22 @@ def _evaluate(n_th, T01, P01, P3, reac, U, gamma, R, Cp1, Cp3, T3s, V1, P1, fld,
     P03R = (P02R + Y_r * P3) / (1 + Y_r)
     P3_calc = P03R / (T03R / T3) ** g                 # exit static pressure implied by losses
 
+    # Mach numbers (absolute and relative) at stator exit (station 2) and rotor exit (station 3)
+    a2 = np.sqrt(gamma * R * T2)   # speed of sound at station 2
+    a3 = np.sqrt(gamma * R * T3)   # speed of sound at station 3
+    M2, M2R = V2 / a2, W2 / a2     # stator exit: absolute, relative
+    M3, M3R = V3 / a3, W3 / a3     # rotor exit: absolute, relative
+
     return dict(T03=T03, W=W, T2=T2, T3=T3, P2=P2, P02=P02, P3_calc=P3_calc,
                 A2=A2, A3=A3, h2=h2, h3=h3, Y_s=Y_s, Y_r=Y_r,
-                alpha2=alpha2, beta2=beta2, beta3=beta3)
+                alpha2=alpha2, beta2=beta2, beta3=beta3,
+                M2=M2, M2R=M2R, M3=M3, M3R=M3R, T02=T02, alpha3=alpha3,
+                P02R=P02R, T02R=T02R, P03R=P03R, T03R=T03R)
 
 # Function to calculate the exit flow conditions of a single-stage turbine using the Kacker-Okapuu loss model
 
 def single_stage_turbine(T01, P01, P3, mdot_core, mdot_cool, reac, r_hub, U,
-                         geom=None, E=None, loss_select=None, phi=None, M_inlet = 0.25):
+                         geom=None, E=None, loss_select=None, phi=None, M_inlet = 0.25, debug=False):
     """
     Calculate the exit flow conditions of a single-stage turbine using the Kacker-Okapuu loss model.
 
@@ -149,12 +166,20 @@ def single_stage_turbine(T01, P01, P3, mdot_core, mdot_cool, reac, r_hub, U,
         imposed through T2 on every pass).
     INNER loop (max 100 it): stator exit pressure P2 with KO stator losses.
 
-    Optional: geom (dict, see DEFAULT_GEOM), E (KO empirical coefficients), loss_select.
+    Optional: geom (dict, see DEFAULT_GEOM), E (fHub, a single number), loss_select,
+    debug (True -> print the traceback when the KO model raises, instead of silently returning NaN).
+    Axial velocity: set by M_inlet unless phi (flow coefficient Vx/U) is given.
 
-    Returns T03, P03, eta_tt, eta_ts, W, A2, A3, blade_h2, blade_h3
-    (all NaN if either loop fails to converge within 100 iterations).
+    Returns a tuple in the order of OUTPUT_NAMES:
+        T03, P03, eta_tt, eta_ts, W, A2, A3, h2, h3,           (exit total T/P, efficiencies, work, areas, heights)
+        Y_s, Y_r, alpha2, beta2, beta3,                         (KO loss coefficients, flow angles in deg)
+        M2, M2R, M3, M3R,                                       (Mach: stator exit abs/rel, rotor exit abs/rel)
+        P2, T2, T3, P02, T02,                                   (static P2, T2, T3; total P02, T02)
+        alpha3,                                                 (absolute flow angle at rotor exit, deg)
+        sol                                                     (dict with every intermediate result)
+    If either loop fails to converge within 100 iterations, every numeric entry is NaN and sol is {}.
     """
-    nan_out = (np.nan,) * 9
+    nan_out = (np.nan,) * (len(OUTPUT_NAMES) - 1) + ({},)
     geom = {**DEFAULT_GEOM, **(geom or {})}
     E = DEFAULT_E if E is None else E
     loss_select = DEFAULT_LOSSES if loss_select is None else loss_select
@@ -189,6 +214,8 @@ def single_stage_turbine(T01, P01, P3, mdot_core, mdot_cool, reac, r_hub, U,
         try:
             res = _evaluate(n, *args)
         except Exception:      # KO model raised (invalid inputs) -> treat as non-physical
+            if debug:          # debug=True prints the real error instead of silently returning NaN
+                traceback.print_exc()
             return None, None
         if res is None:
             return None, None
@@ -221,8 +248,12 @@ def single_stage_turbine(T01, P01, P3, mdot_core, mdot_cool, reac, r_hub, U,
     T03, W, T3 = sol['T03'], sol['W'], sol['T3']
     Cp_avg = (Cp1 + Cp3) / 2
     P03 = P3 * (T03 / T3) ** (gamma / (gamma - 1))
+    sol['P03'] = P03   # keep the exit total pressure in the results dict too
 
     eta_tt = W / (Cp_avg * T01 * (1 - (P03 / P01) ** ((gamma - 1) / gamma)))
     eta_ts = W / (Cp_avg * T01 * (1 - (P3 / P01) ** ((gamma - 1) / gamma)))
 
-    return T03, P03, eta_tt, eta_ts, W, sol['A2'], sol['A3'], sol['h2'], sol['h3']
+    return (T03, P03, eta_tt, eta_ts, W, sol['A2'], sol['A3'], sol['h2'], sol['h3'],
+            sol['Y_s'], sol['Y_r'], sol['alpha2'], sol['beta2'], sol['beta3'],
+            sol['M2'], sol['M2R'], sol['M3'], sol['M3R'],
+            sol['P2'], sol['T2'], sol['T3'], sol['P02'], sol['T02'], sol['alpha3'], sol)
