@@ -3,8 +3,29 @@
 Units: angles [rad], lengths [m], velocities [m/s], pressures [Pa],
 density [kg/m^3], viscosity [Pa*s].
 """
-import math
 import numpy as np
+
+def aungier_fits(exit_angle, s_c):
+    alpha2p = 90 - exit_angle
+
+    # ---- Nozzle blade, beta1 = 0 from axial (Aungier Fig. 4-3, Eqs. 4-22 to 4-31) ----
+    sc_min_n = 0.46 + alpha2p / 77.0 if alpha2p <= 30.0 else 0.614 + alpha2p / 130.0
+    X_n = s_c - sc_min_n
+    n_n = 1.0 + alpha2p / 30.0
+    A_n = 0.025 + (27.0 - alpha2p) / 530.0 if alpha2p <= 27.0 else 0.025 + (27.0 - alpha2p) / 3085.0
+    B_n = 0.1583 - alpha2p / 1640.0
+    C_n = 0.08 * ((alpha2p / 30.0)**2 - 1.0)
+    Yp_nozzle = A_n + B_n * X_n**2 + C_n * X_n**3 if alpha2p <= 30.0 else A_n + B_n * abs(X_n)**n_n
+
+    # ---- Impulse blade, beta1 = alpha2 (Aungier Fig. 4-4, Eqs. 4-32 to 4-38) ----
+    sc_min_i = 0.224 + 1.575 * (alpha2p / 90.0) - (alpha2p / 90.0)**2
+    X_i = s_c - sc_min_i
+    A_i = 0.242 - alpha2p / 151.0 + (alpha2p / 127.0)**2
+    B_i = 0.3 + (30.0 - alpha2p) / 50.0 if alpha2p <= 30.0 else 0.3 + (30.0 - alpha2p) / 275.0
+    C_i = 0.88 - alpha2p / 42.4 + (alpha2p / 72.8)**2
+    Yp_impulse = A_i + B_i * X_i**2 - C_i * X_i**3
+
+    return Yp_nozzle, Yp_impulse
 
 
 def ko_losses(V, G, F, B, E, loss_select):
@@ -47,10 +68,10 @@ def ko_losses(V, G, F, B, E, loss_select):
     # ---- Unpack lists -------------------------------------------------
     (in_speed, angle_in, in_p0, in_p,
      out_speed, angle_out, out_p0, out_p) = V
-    (chord, tMax, rHub, rTip, axialChord, height, tClearance) = G
+    (chord, tMax, rHub, rTip, axialChord, height, tClearance, t_o) = G
     aIn, aOut, rhoOut, muOut, g = F
     b_type, shrouded = B
-    (YpReaction, YpImpulse, fHub, dPhi2Reaction, dPhi2Impulse) = E
+    (fHub) = E
 
     # ---- Initialize outputs -------------------------------------------
     Y_profile = 0.0
@@ -92,17 +113,20 @@ def ko_losses(V, G, F, B, E, loss_select):
     fMa = 1.0 if M_out <= 1 else 1 + 60 * (M_out - 1) ** 2
 
     # ---- Blade loading parameters --------------------------------------
-    alpha1 = math.radians(angle_in) # Whatever angle the gas enters the row (abs. for stator, relative for rotor)
-    alpha2 = math.radians(angle_out) # Whatever angle the gas exits the row (abs. for stator, relative for rotor)
+    alpha1 = np.radians(angle_in) # Whatever angle the gas enters the row (abs. for stator, relative for rotor)
+    alpha2 = np.radians(angle_out) # Whatever angle the gas exits the row (abs. for stator, relative for rotor)
     beta1 = alpha1 # Assuming zero incidence for blades
-    alphaMean = math.atan(0.5 * (math.tan(alpha1) + math.tan(alpha2)))
-    CL_sc = 2 * math.cos(alphaMean) * (math.tan(alpha1) + math.tan(alpha2))
-    Z = CL_sc ** 2 * math.cos(alpha2) ** 2 / math.cos(alphaMean) ** 3
+    alphaMean = np.arctan(0.5 * (np.tan(alpha1) + np.tan(alpha2)))
+    CL_sc = 2 * np.cos(alphaMean) * (np.tan(alpha1) + np.tan(alpha2))
+    Z = CL_sc ** 2 * np.cos(alpha2) ** 2 / np.cos(alphaMean) ** 3
 
     # ---- 1. Profile loss ----------------------------------------------
     if 1 in loss_select:
         ratio = beta1 / alpha2
-        YpPrime = ((YpReaction + ratio * abs(ratio) * (YpImpulse - YpReaction))
+
+        Yp_nozzle, Yp_impulse = aungier_fits(angle_out, axialChord / chord)
+
+        YpPrime = ((Yp_nozzle + ratio * abs(ratio) * (Yp_impulse - Yp_nozzle))
                    * ((tMax / chord) / 0.20) ** (ratio))
 
         # Shock loss
@@ -126,10 +150,10 @@ def ko_losses(V, G, F, B, E, loss_select):
         Ks = 1 - K3 * (1 - Kp)
         AR = height / chord
         if AR < 2:
-            fAR = (1 - 0.25 * math.sqrt(2 - AR)) / AR
+            fAR = (1 - 0.25 * np.sqrt(2 - AR)) / AR
         else:
             fAR = 1 / AR
-        Y_S_AMDC = 0.0334 * fAR * Z * math.cos(alpha2) / math.cos(beta1)
+        Y_S_AMDC = 0.0334 * fAR * Z * np.cos(alpha2) / np.cos(beta1)
         Y_secondary = 1.2 * Ks * Y_S_AMDC
 
     # ---- 3. Tip clearance loss ----------------------------------------
@@ -146,6 +170,10 @@ def ko_losses(V, G, F, B, E, loss_select):
 
     # ---- 4. Trailing edge loss ----------------------------------------
     if 4 in loss_select:
+        # Kacker–Okapuu Fig. 14: trailing-edge energy loss coefficient vs t/o (valid 0 <= t/o <= 0.4)
+        dPhi2Reaction = 1.5702*t_o**2 - 2.5076*t_o**3 + 1.9376*t_o**4   # axial-entry nozzle (beta1 = 0)
+        dPhi2Impulse  = 0.8385*t_o**2 - 1.4096*t_o**3 + 1.1127*t_o**4   # impulse blading (beta1 = alpha2)
+
         ratio = beta1 / alpha2
         dPhi2 = dPhi2Reaction + ratio * abs(ratio) * (dPhi2Impulse - dPhi2Reaction)
         if dPhi2 < 0 or dPhi2 >= 1:
