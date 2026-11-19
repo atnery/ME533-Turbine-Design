@@ -71,6 +71,7 @@ def two_stage_contra(phi1, psi1, R1, R2, exit_swirl, rpm1, T01, P01, mdot, P01_P
         P02 = P01 / (1 + Yp_s * (1 - 1 / P02_P2))
         P2 = P02 / P02_P2
         P02r = P2 * (T02r / T2)**(gamma / (gamma - 1))
+        rho2 = P2 / (R * T2)
 
         # Station 3.1 (Rotor 1 exit)
         h03r = h02r
@@ -87,6 +88,7 @@ def two_stage_contra(phi1, psi1, R1, R2, exit_swirl, rpm1, T01, P01, mdot, P01_P
         P03r = P02r / (1 + Yp_r1 * (1 - 1 / P03r_P3))
         P3 = P03r / P03r_P3
         P03 = P3 * (T03 / T3)**(gamma / (gamma - 1))
+        rho3 = P3 / (R * T3)
 
         # Station 3.2 (Rotor 2 inlet)
         h03r_2 = h3 + W3_2**2 / 2
@@ -109,6 +111,7 @@ def two_stage_contra(phi1, psi1, R1, R2, exit_swirl, rpm1, T01, P01, mdot, P01_P
         P04r = P03r_2 / (1 + Yp_r2 * (1 - 1 / P04r_P4))
         P4 = P04r / P04r_P4
         P04 = P4 * (T04 / T4)**(gamma / (gamma - 1))
+        rho4 = P4 / (R * T4)
 
         ref = 0.5*(T01 + T4), 0.5*(P01 + P4)
 
@@ -129,4 +132,19 @@ def two_stage_contra(phi1, psi1, R1, R2, exit_swirl, rpm1, T01, P01, mdot, P01_P
     r = U1 / omega1
     omega2 = U2 / r
     rpm2 = omega2 / c.RPM2RAD
+
+    A2 = mdot / (rho2 * Cx)
+    A3 = mdot / (rho3 * Cx)
+    A4 = mdot / (rho4 * Cx)
+
+    AN2_r1 = A3 * rpm1**2
+    AN2_r2 = A4 * rpm2**2
+
+    height2 = A2 / (2 * np.pi * r)
+    height3 = A3 / (2 * np.pi * r)
+    height4 = A4 / (2 * np.pi * r)
+
+    return 
+
+
 
