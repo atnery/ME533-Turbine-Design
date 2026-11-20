@@ -1,6 +1,6 @@
 """Kacker-Okapuu turbine loss model (converted from MATLAB).
 
-Units: angles [rad], lengths [m], velocities [m/s], pressures [Pa],
+Units: angles [deg], lengths [m], velocities [m/s], pressures [Pa],
 density [kg/m^3], viscosity [Pa*s].
 """
 import numpy as np
@@ -35,10 +35,10 @@ def ko_losses(V, G, F, B, E, loss_select):
 
     V  = [in_speed, angle_in, in_p0, in_p,
           out_speed, angle_out, out_p0, out_p] # Velocity and pressure conditions
-    G  = [chord, tMax, rHub, rTip, axialChord, height, tClearance] # Geometry of blade
+    G  = [chord, tMax, rHub, rTip, axialChord, height, tClearance, s_c, t_o] # Geometry of blade (tClearance = k' for shrouded, Eq. 21)
     F  = [aIn, aOut, rhoOut, muOut, g] # Flow properties
     B  = [type, shrouded]            # type: 'stator' or 'rotor'; shrouded: bool # Type of blade and whether it is shrouded
-    E  = [YpReaction, YpImpulse, fHub, dPhi2Reaction, dPhi2Impulse] # Empirical coefficients for loss correlations
+    E  = dh0 # Row work (Eq. 19, unshrouded rotors)
     loss_select = list containing any of 1, 2, 3, 4
                   (1 profile, 2 secondary, 3 tip clearance, 4 trailing edge) # What losses to consider
 
@@ -47,7 +47,7 @@ def ko_losses(V, G, F, B, E, loss_select):
 
     Returns
     -------
-    (Y_total, Y_profile, Y_secondary, Y_clearance, Y_trailing_edge)
+    (Y_total, Y_profile, Y_secondary, Y_clearance, Y_trailing_edge, Y_shock) # Y_shock is included in Y_profile
 
     Blade Geometry Convention:
     - Inlet angles are positive in the counter-clockwise (CCW) direction from the inlet horizontal axis
@@ -68,16 +68,17 @@ def ko_losses(V, G, F, B, E, loss_select):
     # ---- Unpack lists -------------------------------------------------
     (in_speed, angle_in, in_p0, in_p,
      out_speed, angle_out, out_p0, out_p) = V
-    (chord, tMax, rHub, rTip, axialChord, height, tClearance, t_o) = G
+    (chord, tMax, rHub, rTip, axialChord, height, tClearance, s_c, t_o) = G
     aIn, aOut, rhoOut, muOut, g = F
     b_type, shrouded = B
-    (fHub) = E
+    dh0 = E
 
     # ---- Initialize outputs -------------------------------------------
     Y_profile = 0.0
     Y_secondary = 0.0
     Y_clearance = 0.0
     Y_trailing_edge = 0.0
+    Y_shock = 0.0
 
     # ---- Validate inputs ----------------------------------------------
     if len(loss_select) == 0 or any(s not in (1, 2, 3, 4) for s in loss_select):
@@ -89,6 +90,7 @@ def ko_losses(V, G, F, B, E, loss_select):
     # ---- Mach numbers -------------------------------------------------
     M_in = in_speed / aIn
     M_out = out_speed / aOut
+    M_out_sub = min(M_out, 1.0) # Corrections held at M2 = 1 for supersonic exit
 
     # ---- Reynolds number correction -----------------------------------
     Re = rhoOut * out_speed * chord / muOut
@@ -100,13 +102,11 @@ def ko_losses(V, G, F, B, E, loss_select):
         fRe = (Re / 1e6) ** (-0.2)
 
     # ---- Mach number corrections --------------------------------------
-    if M_out < 0.2:
+    if M_out_sub < 0.2:
         K1 = 1.0
-    elif M_out <= 1:
-        K1 = 1 - 1.25 * (M_out - 0.2)
     else:
-        K1 = 0.0
-    K2 = (M_in / M_out) ** 2
+        K1 = 1 - 1.25 * (M_out_sub - 0.2)
+    K2 = min(M_in / M_out_sub, 1.0) ** 2
     Kp = 1 - K2 * (1 - K1)
 
     # Supersonic exit correction
@@ -116,22 +116,27 @@ def ko_losses(V, G, F, B, E, loss_select):
     alpha1 = np.radians(angle_in) # Whatever angle the gas enters the row (abs. for stator, relative for rotor)
     alpha2 = np.radians(angle_out) # Whatever angle the gas exits the row (abs. for stator, relative for rotor)
     beta1 = alpha1 # Assuming zero incidence for blades
-    alphaMean = np.arctan(0.5 * (np.tan(alpha1) + np.tan(alpha2)))
+    alphaMean = np.arctan(0.5 * (np.tan(alpha1) - np.tan(alpha2)))
     CL_sc = 2 * np.cos(alphaMean) * (np.tan(alpha1) + np.tan(alpha2))
     Z = CL_sc ** 2 * np.cos(alpha2) ** 2 / np.cos(alphaMean) ** 3
 
     # ---- 1. Profile loss ----------------------------------------------
     if 1 in loss_select:
-        ratio = beta1 / alpha2
-
-        Yp_nozzle, Yp_impulse = aungier_fits(angle_out, axialChord / chord)
+        ratio = max(beta1 / alpha2, 0.0)
+        
+        Yp_nozzle, Yp_impulse = aungier_fits(angle_out, s_c)
 
         YpPrime = ((Yp_nozzle + ratio * abs(ratio) * (Yp_impulse - Yp_nozzle))
                    * ((tMax / chord) / 0.20) ** (ratio))
 
         # Shock loss
-        shockTerm = 0.75 * (fHub * M_in - 0.40) ** 1.75
-        if np.real(shockTerm) > 0 and shockTerm.imag == 0:
+        rh_rt = max(rHub / rTip, 0.5) # Fig. 6 data range
+        if b_type == "rotor":
+            fHub = 1 + 6.0979 * max(0.9425 - rh_rt, 0.0) ** 2 # Fig. 6 fit
+        else:
+            fHub = 1 + 3.6491 * max(0.7723 - rh_rt, 0.0) ** 1.6809
+        shockTerm = 0.75 * max(fHub * M_in - 0.40, 0.0) ** 1.75
+        if shockTerm > 0:
             qIn = in_p0 - in_p
             qOut = out_p0 - out_p
             if qIn <= 0 or qOut <= 0:
@@ -143,6 +148,7 @@ def ko_losses(V, G, F, B, E, loss_select):
         Y_profile = 0.914 * ((2 / 3) * YpPrime * Kp + Yshock)
         # Reynolds and Mach corrections apply to profile loss
         Y_profile = fRe * fMa * Y_profile
+        Y_shock = fRe * fMa * 0.914 * Yshock
 
     # ---- 2. Secondary loss --------------------------------------------
     if 2 in loss_select:
@@ -163,13 +169,15 @@ def ko_losses(V, G, F, B, E, loss_select):
         elif shrouded:
             Bclearance = 0.37
         else:
-            # KO recommendation for plain-tip rotor (kept from original)
             Bclearance = 0.0
         Y_clearance = (Bclearance * Z * (chord / height)
-                       * (tClearance / height) ** 0.78)
+                       * (tClearance / chord) ** 0.78)
+        if b_type == "rotor" and not shrouded: # Eq. 19 efficiency debit -> equivalent Y
+            dEta = 0.93 * tClearance / (height * np.cos(alpha2)) * rTip / (0.5 * (rHub + rTip))
+            Y_clearance = out_p0 * (np.exp(dEta * dh0 * rhoOut / out_p) - 1) / (out_p0 - out_p)
 
     # ---- 4. Trailing edge loss ----------------------------------------
-    if 4 in loss_select:
+    if 4 in loss_select and M_out <= 1: # Supersonic TE loss included in fMa
         # Kacker–Okapuu Fig. 14: trailing-edge energy loss coefficient vs t/o (valid 0 <= t/o <= 0.4)
         dPhi2Reaction = 1.5702*t_o**2 - 2.5076*t_o**3 + 1.9376*t_o**4   # axial-entry nozzle (beta1 = 0)
         dPhi2Impulse  = 0.8385*t_o**2 - 1.4096*t_o**3 + 1.1127*t_o**4   # impulse blading (beta1 = alpha2)
@@ -184,4 +192,4 @@ def ko_losses(V, G, F, B, E, loss_select):
 
     # ---- Total loss ---------------------------------------------------
     Y_total = Y_profile + Y_secondary + Y_clearance + Y_trailing_edge
-    return Y_total, Y_profile, Y_secondary, Y_clearance, Y_trailing_edge
+    return Y_total, Y_profile, Y_secondary, Y_clearance, Y_trailing_edge, Y_shock
