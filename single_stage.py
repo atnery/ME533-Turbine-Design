@@ -8,12 +8,14 @@ from KO_losses import ko_losses
 MAX_ITER = 100      # Max iterations for BOTH loops
 TOL_P3 = 1e-4       # Relative tolerance on exit static pressure match (outer loop)
 TOL_P2 = 1e-6       # Relative tolerance on stator exit pressure (inner loop)
+AN2_MAX_DEFAULT = 3.2e7   # Structural limit on A*N^2 at stator inlet, stator exit AND rotor exit [m^2 rpm^2]
 
 # Order of the values returned by single_stage_turbine (last entry is the full results dict)
 OUTPUT_NAMES = ["T03", "P03", "eta_tt", "eta_ts", "W", "A2", "A3", "h2", "h3",
                 "Y_s", "Y_r", "alpha2", "beta2", "beta3",
                 "M2", "M2R", "M3", "M3R",
-                "P2", "T2", "T3", "P02", "T02", "alpha3", "sol"]
+                "P2", "T2", "T3", "P02", "T02", "alpha3",
+                "N_rpm", "r_mean3", "A1", "AN2_1", "AN2_2", "AN2_3", "sol"]
 
 # Blade geometry NOT supplied by the caller is derived from these ratios (preliminary design values)
 DEFAULT_GEOM = dict(
@@ -157,7 +159,7 @@ def _evaluate(n_th, T01, P01, P3, reac, U, gamma, R, Cp1, Cp3, T3s, V1, P1, fld,
 # Function to calculate the exit flow conditions of a single-stage turbine using the Kacker-Okapuu loss model
 
 def single_stage_turbine(T01, P01, P3, mdot_core, mdot_cool, reac, r_hub, U,
-                         geom=None, E=None, loss_select=None, phi=None, M_inlet = 0.25, debug=False):
+                         geom=None, E=None, loss_select=None, phi=None, M_inlet = 0.25, debug=False, AN2_max=AN2_MAX_DEFAULT):
     """
     Calculate the exit flow conditions of a single-stage turbine using the Kacker-Okapuu loss model.
 
@@ -169,6 +171,10 @@ def single_stage_turbine(T01, P01, P3, mdot_core, mdot_cool, reac, r_hub, U,
     Optional: geom (dict, see DEFAULT_GEOM), E (fHub, a single number), loss_select,
     debug (True -> print the traceback when the KO model raises, instead of silently returning NaN).
     Axial velocity: set by M_inlet unless phi (flow coefficient Vx/U) is given.
+    AN2_max: structural limit on A*N^2 [m^2 rpm^2] (default 3.2e7, None = do not enforce). It is checked at
+        station 1 (stator inlet), station 2 (stator exit) and station 3 (rotor exit); exceeding it at ANY of them
+        omits the design (all NaN). A1 = mdot/(rho1*Vx), A2, A3 are the annulus areas. One shaft speed N applies to
+        all three, found from U at the rotor exit MEAN radius: N = 60*U/(2*pi*r_mean3), r_mean3 = (r_hub + r_tip3)/2.
 
     Returns a tuple in the order of OUTPUT_NAMES:
         T03, P03, eta_tt, eta_ts, W, A2, A3, h2, h3,           (exit total T/P, efficiencies, work, areas, heights)
@@ -176,8 +182,10 @@ def single_stage_turbine(T01, P01, P3, mdot_core, mdot_cool, reac, r_hub, U,
         M2, M2R, M3, M3R,                                       (Mach: stator exit abs/rel, rotor exit abs/rel)
         P2, T2, T3, P02, T02,                                   (static P2, T2, T3; total P02, T02)
         alpha3,                                                 (absolute flow angle at rotor exit, deg)
+        N_rpm, r_mean3, A1,                                     (shaft speed [rpm], rotor exit mean radius [m], stator inlet annulus area [m^2])
+        AN2_1, AN2_2, AN2_3,                                    (A*N^2 at stator inlet, stator exit, rotor exit [m^2 rpm^2])
         sol                                                     (dict with every intermediate result)
-    If either loop fails to converge within 100 iterations, every numeric entry is NaN and sol is {}.
+    If either loop fails to converge within 100 iterations, or AN2 > AN2_max at any station, every numeric entry is NaN and sol is {}.
     """
     nan_out = (np.nan,) * (len(OUTPUT_NAMES) - 1) + ({},)
     geom = {**DEFAULT_GEOM, **(geom or {})}
@@ -244,6 +252,24 @@ def single_stage_turbine(T01, P01, P3, mdot_core, mdot_cool, reac, r_hub, U,
     if sol is None:
         return nan_out
 
+    # ---------------- AN^2 structural constraint at stations 1, 2 and 3 ----------------
+    rho1 = PropsSI('D', 'T', T1, 'P', P1, fld)       # stator inlet static density
+    A1 = mdot_total / (rho1 * V1)                    # stator inlet annulus area
+    A2, A3 = sol['A2'], sol['A3']                    # stator exit / rotor exit annulus areas
+    r_tip3 = np.sqrt(A3 / np.pi + r_hub**2)          # rotor exit tip radius
+    r_mean3 = 0.5 * (r_hub + r_tip3)                 # rotor exit mean radius (U is taken at this radius)
+    N_rpm = 60.0 * U / (2 * np.pi * r_mean3)         # single shaft speed [rpm]
+    AN2_1, AN2_2, AN2_3 = A1 * N_rpm**2, A2 * N_rpm**2, A3 * N_rpm**2   # [m^2 rpm^2]
+    sol.update(A1=A1, N_rpm=N_rpm, r_mean3=r_mean3, AN2_1=AN2_1, AN2_2=AN2_2, AN2_3=AN2_3)
+    if AN2_max is not None:
+        over = [(name, val) for name, val in (("stator inlet", AN2_1), ("stator exit", AN2_2), ("rotor exit", AN2_3))
+                if val > AN2_max]
+        if over:
+            if debug:
+                print("Design omitted: AN2 limit " + f"{AN2_max:.3e}" + " exceeded at " +
+                      ", ".join(f"{n} ({v:.3e})" for n, v in over))
+            return nan_out
+
     # ---------------- Outputs ----------------
     T03, W, T3 = sol['T03'], sol['W'], sol['T3']
     Cp_avg = (Cp1 + Cp3) / 2
@@ -256,4 +282,5 @@ def single_stage_turbine(T01, P01, P3, mdot_core, mdot_cool, reac, r_hub, U,
     return (T03, P03, eta_tt, eta_ts, W, sol['A2'], sol['A3'], sol['h2'], sol['h3'],
             sol['Y_s'], sol['Y_r'], sol['alpha2'], sol['beta2'], sol['beta3'],
             sol['M2'], sol['M2R'], sol['M3'], sol['M3R'],
-            sol['P2'], sol['T2'], sol['T3'], sol['P02'], sol['T02'], sol['alpha3'], sol)
+            sol['P2'], sol['T2'], sol['T3'], sol['P02'], sol['T02'], sol['alpha3'],
+            N_rpm, r_mean3, A1, AN2_1, AN2_2, AN2_3, sol)
