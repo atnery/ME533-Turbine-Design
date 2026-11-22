@@ -90,7 +90,7 @@ def ko_losses(V, G, F, B, E, loss_select):
     # ---- Mach numbers -------------------------------------------------
     M_in = in_speed / aIn
     M_out = out_speed / aOut
-    M_out_sub = min(M_out, 1.0) # Corrections held at M2 = 1 for supersonic exit
+    M_out_sub = min(M_out, 1.0) # Corrections held at M2 = 1 for supersonic exit, used in Kp computation
 
     # ---- Reynolds number correction -----------------------------------
     Re = rhoOut * out_speed * chord / muOut
@@ -107,7 +107,7 @@ def ko_losses(V, G, F, B, E, loss_select):
     else:
         K1 = 1 - 1.25 * (M_out_sub - 0.2)
     K2 = min(M_in / M_out_sub, 1.0) ** 2
-    Kp = 1 - K2 * (1 - K1)
+    Kp = 1 - K2 * (1 - K1) # M_out_sub used to prevent negative coefficient for profile loss
 
     # Supersonic exit correction
     fMa = 1.0 if M_out <= 1 else 1 + 60 * (M_out - 1) ** 2
@@ -130,7 +130,7 @@ def ko_losses(V, G, F, B, E, loss_select):
                    * ((tMax / chord) / 0.20) ** (ratio))
 
         # Shock loss
-        rh_rt = max(rHub / rTip, 0.5) # Fig. 6 data range
+        rh_rt = max(rHub / rTip, 0.5) # Fig. 6 data range, and since it is non-sensical to have a hub radius less than 50% of the tip radius
         if b_type == "rotor":
             fHub = 1 + 6.0979 * max(0.9425 - rh_rt, 0.0) ** 2 # Fig. 6 fit
         else:

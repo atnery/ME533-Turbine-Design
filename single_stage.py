@@ -23,18 +23,18 @@ DEFAULT_GEOM = dict(
     tmax_over_c=0.20,       # max thickness / chord
     ax_over_c=0.80,         # axial chord / chord
     clearance_over_h=0.015, # rotor tip clearance / blade height
-    shrouded=False,         # rotor shroud
+    shrouded=True,         # rotor shroud
+    s_over_c=0.80,          # pitch / chord (used by the Aungier profile-loss fits)  <-- placeholder, set yours
     te_over_o=0.05,         # trailing-edge thickness / throat opening (t/o), valid 0-0.4  <-- placeholder, set yours
 )
 
-# E is now ONLY fHub (hub-to-tip Mach correction used in the KO shock-loss term). A single number, not a list.
-# The profile (Aungier fits) and trailing-edge (t/o) coefficients are now computed inside ko_losses.
-DEFAULT_E = 1.0   # fHub  <-- placeholder, set yours
+# NOTE: ko_losses now computes fHub itself, and its 'E' input is the row work dh0 [J/kg] (used for the unshrouded
+# rotor tip-clearance loss, Eq. 19). single_stage_turbine therefore has no E argument: dh0 is taken from the solution.
 DEFAULT_LOSSES = [1, 2, 3, 4] # Consider all losses by default: 1 profile, 2 secondary, 3 tip clearance, 4 trailing edge
 
 
 def _ko_Y(row, V_in, ang_in, V_out, ang_out, P0_in, P_in, P0_out, P_out,
-          T_in, T_out, rho_out, mu_out, height, r_tip, r_hub, gamma, R, geom, E, loss_select):
+          T_in, T_out, rho_out, mu_out, height, r_tip, r_hub, gamma, R, geom, dh0, loss_select):
     """
     Wrapper around ko_losses. Angles in degrees; for a rotor pass RELATIVE velocities/angles/pressures.
     Returns Y_total only (first element of the tuple ko_losses returns).
@@ -42,14 +42,14 @@ def _ko_Y(row, V_in, ang_in, V_out, ang_out, P0_in, P_in, P0_out, P_out,
     chord = height / geom['h_over_c']
     V = [V_in, ang_in, P0_in, P_in, V_out, ang_out, P0_out, P_out]
     G = [chord, geom['tmax_over_c'] * chord, r_hub, r_tip,
-         geom['ax_over_c'] * chord, height, geom['clearance_over_h'] * height, geom['te_over_o']]
+         geom['ax_over_c'] * chord, height, geom['clearance_over_h'] * height, geom['s_over_c'], geom['te_over_o']]
     F = [np.sqrt(gamma * R * T_in), np.sqrt(gamma * R * T_out), rho_out, mu_out, gamma]
     B = [row, geom['shrouded']]
-    return float(ko_losses(V, G, F, B, E, loss_select)[0])
+    return float(ko_losses(V, G, F, B, dh0, loss_select)[0])
 
 
 def _evaluate(n_th, T01, P01, P3, reac, U, gamma, R, Cp1, Cp3, T3s, V1, P1, fld,
-              mdot, r_hub, geom, E, loss_select):
+              mdot, r_hub, geom, loss_select):
     """
     One full pass of the stage for a given assumed efficiency n_th.
     Contains the INNER loop (stator exit pressure P2 with KO stator losses).
@@ -115,9 +115,9 @@ def _evaluate(n_th, T01, P01, P3, reac, U, gamma, R, Cp1, Cp3, T3s, V1, P1, fld,
         P02_guess = P2 * (T02 / T2) ** g # Stagnation pressure at stator exit (guess)
         Y_s = _ko_Y('stator', V1, 0.0, V2, alpha2, P01, P1, P02_guess, P2,
                     T1, T2, rho2, mu2, h2, r_tip2, r_hub,
-                    gamma, R, geom, E, loss_select) #  KO stator loss coefficient from KO function
+                    gamma, R, geom, 0.0, loss_select) #  KO stator loss coefficient (dh0 unused for a stator)
         P02 = (P01 + Y_s * P2) / (1 + Y_s)           # from Y = (P01-P02)/(P02-P2)
-        P2_new = P02 / (T02 / T2) ** g                # static P2 consistent with actual V2
+        P2_new = P02 / ((T02 / T2) ** g)                # static P2 consistent with actual V2
         if abs(P2_new - P2) / P2 < TOL_P2:
             P2 = P2_new
             converged = True
@@ -140,7 +140,7 @@ def _evaluate(n_th, T01, P01, P3, reac, U, gamma, R, Cp1, Cp3, T3s, V1, P1, fld,
 
     # KO angle convention: inlet CCW+, exit CW+ -> rotor exit relative angle enters with flipped sign
     Y_r = _ko_Y('rotor', W2, beta2, W3, -beta3, P02R, P2, P03R_guess, P3,
-                T2, T3, rho3, mu3, h3, r_tip3, r_hub, gamma, R, geom, E, loss_select)
+                T2, T3, rho3, mu3, h3, r_tip3, r_hub, gamma, R, geom, W, loss_select)   # dh0 = rotor work = stage work W
     P03R = (P02R + Y_r * P3) / (1 + Y_r)
     P3_calc = P03R / (T03R / T3) ** g                 # exit static pressure implied by losses
 
@@ -159,7 +159,7 @@ def _evaluate(n_th, T01, P01, P3, reac, U, gamma, R, Cp1, Cp3, T3s, V1, P1, fld,
 # Function to calculate the exit flow conditions of a single-stage turbine using the Kacker-Okapuu loss model
 
 def single_stage_turbine(T01, P01, P3, mdot_core, mdot_cool, reac, r_hub, U,
-                         geom=None, E=None, loss_select=None, phi=None, M_inlet = 0.25, debug=False, AN2_max=AN2_MAX_DEFAULT):
+                         geom=None, loss_select=None, phi=None, M_inlet = 0.25, debug=False, AN2_max=AN2_MAX_DEFAULT):
     """
     Calculate the exit flow conditions of a single-stage turbine using the Kacker-Okapuu loss model.
 
@@ -168,7 +168,7 @@ def single_stage_turbine(T01, P01, P3, mdot_core, mdot_cool, reac, r_hub, U,
         imposed through T2 on every pass).
     INNER loop (max 100 it): stator exit pressure P2 with KO stator losses.
 
-    Optional: geom (dict, see DEFAULT_GEOM), E (fHub, a single number), loss_select,
+    Optional: geom (dict, see DEFAULT_GEOM), loss_select,
     debug (True -> print the traceback when the KO model raises, instead of silently returning NaN).
     Axial velocity: set by M_inlet unless phi (flow coefficient Vx/U) is given.
     AN2_max: structural limit on A*N^2 [m^2 rpm^2] (default 3.2e7, None = do not enforce). It is checked at
@@ -189,7 +189,6 @@ def single_stage_turbine(T01, P01, P3, mdot_core, mdot_cool, reac, r_hub, U,
     """
     nan_out = (np.nan,) * (len(OUTPUT_NAMES) - 1) + ({},)
     geom = {**DEFAULT_GEOM, **(geom or {})}
-    E = DEFAULT_E if E is None else E
     loss_select = DEFAULT_LOSSES if loss_select is None else loss_select
 
     # Inlet fluid properties and definitions
@@ -216,7 +215,7 @@ def single_stage_turbine(T01, P01, P3, mdot_core, mdot_cool, reac, r_hub, U,
     Cp3 = PropsSI('C', 'T', T3s, 'P', P3, fld)
 
     args = (T01, P01, P3, reac, U, gamma, R, Cp1, Cp3, T3s, V1, P1, fld,
-            mdot_total, r_hub, geom, E, loss_select) # Aruments for _evaluate
+            mdot_total, r_hub, geom, loss_select) # Aruments for _evaluate
 
     def err(n): # Evaluate the relative error in exit static pressure for a given assumed efficiency n_th
         try:
