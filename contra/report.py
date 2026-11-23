@@ -2,7 +2,6 @@ import csv
 import numpy as np
 
 M2IN = 1 / 0.0254  # m -> in
-M2MM = 1000.0      # m -> mm
 
 def ff(x, d, w=12):
     """Fixed-point format with d decimals. NaN prints as a dash."""
@@ -27,7 +26,7 @@ def build_tables(rep):
         ("P0REL R1", "PA", st["P0rel_r1"], 0), ("T0REL R1", "K", st["T0rel_r1"], 1),
         ("W R2", "M/S", st["W_r2"], 1), ("BETA R2", "DEG", st["beta_r2"], 2), ("MREL R2", "-", st["Mrel_r2"], 4),
         ("P0REL R2", "PA", st["P0rel_r2"], 0), ("T0REL R2", "K", st["T0rel_r2"], 1),
-        ("AREA", "M2", st["A"], 5), ("HEIGHT", "IN", h * M2IN, 3),
+        ("AREA", "IN2", np.array(st["A"]) * M2IN**2, 2), ("HEIGHT", "IN", h * M2IN, 3),
         ("D HUB", "IN", (2 * r - h) * M2IN, 3), ("D MEAN", "IN", [2 * r * M2IN] * 4, 3), ("D TIP", "IN", (2 * r + h) * M2IN, 3),
     ]
 
@@ -36,17 +35,17 @@ def build_tables(rep):
     Y = np.array(rw["Y"])  # rows: stator/r1/r2; cols: total, profile, secondary, clearance, TE, shock
     rows = [
         ("H INLET", "IN", np.array(rw["h_in"]) * M2IN, 3), ("H EXIT", "IN", np.array(rw["h_out"]) * M2IN, 3),
-        ("CHORD", "MM", chord * M2MM, 2), ("AX CHORD", "MM", np.array(rw["ax_chord"]) * M2MM, 2),
-        ("PITCH", "MM", pitch * M2MM, 2), ("S/C", "-", rw["s_c"], 4),
+        ("CHORD", "IN", chord * M2IN, 3), ("AX CHORD", "IN", np.array(rw["ax_chord"]) * M2IN, 3),
+        ("PITCH", "IN", pitch * M2IN, 3), ("S/C", "-", rw["s_c"], 4),
         ("BLADES", "-", np.ceil(2 * np.pi * r / pitch), 0),
-        ("TMAX", "MM", np.array(rw["tmax"]) * M2MM, 2), ("TIP CLR", "MM", np.array(rw["clr"]) * M2MM, 3),
+        ("TMAX", "IN", np.array(rw["tmax"]) * M2IN, 3), ("TIP CLR", "IN", np.array(rw["clr"]) * M2IN, 4),
         ("ANG IN", "DEG", rw["ang_in"], 2), ("ANG OUT", "DEG", rw["ang_out"], 2),
         ("TURNING", "DEG", rw["turning"], 2), ("XI", "-", rw["xi"], 4),
         ("M IN", "-", rw["M_in"], 4), ("M OUT", "-", rw["M_out"], 4),
         ("Y PROFILE", "-", Y[:, 1], 5), ("  SHOCK", "-", Y[:, 5], 5), ("Y SECOND", "-", Y[:, 2], 5), ("Y CLEAR", "-", Y[:, 3], 5),
         ("Y TE", "-", Y[:, 4], 5), ("Y TOTAL", "-", Y[:, 0], 5),
         ("DH STATIC", "FRAC", rw["dh_split"], 4),
-        ("RPM", "RPM", rw["rpm"], 0), ("AN2", "M2RPM2", rw["AN2"], 0),
+        ("RPM", "RPM", rw["rpm"], 0), ("AN2", "IN2RPM2", np.array(rw["AN2"]) * M2IN**2, 0),
     ]
 
     stage = [
@@ -55,7 +54,11 @@ def build_tables(rep):
         ("PHI2", "-", sg["phi2"], 4), ("PSI2", "-", sg["psi2"], 4), ("R2 (DH0)", "-", sg["R2"], 4),
         ("U2/U1", "-", sg["s"], 4), ("U1", "M/S", sg["U1"], 2), ("U2", "M/S", sg["U2"], 2),
         ("DH0 R1", "J/KG", sg["dh0_r1"], 0), ("DH0 R2", "J/KG", sg["dh0_r2"], 0),
-        ("POWER", "W", sg["power"], 0), ("MDOT", "KG/S", sg["mdot"], 3),
+        ("POWER R1", "KW", sg["mdot"] * sg["dh0_r1"] / 1e3, 1), ("POWER R2", "KW", sg["mdot"] * sg["dh0_r2"] / 1e3, 1),
+        ("POWER TOT", "KW", sg["power"] / 1e3, 1),
+        ("WORK FR R1", "-", sg["dh0_r1"] / (sg["dh0_r1"] + sg["dh0_r2"]), 4),
+        ("WORK FR R2", "-", sg["dh0_r2"] / (sg["dh0_r1"] + sg["dh0_r2"]), 4),
+        ("MDOT", "KG/S", sg["mdot"], 3),
         ("T01", "K", sg["T01"], 1), ("P01", "PA", sg["P01"], 0), ("P01/PE", "-", sg["PR"], 3),
         ("ETA TS", "-", sg["eta_ts"], 4), ("ETA TT", "-", sg["eta_tt"], 4),
     ]

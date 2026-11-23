@@ -1,3 +1,6 @@
+import sys, pathlib
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+
 import numpy as np
 from CoolProp.CoolProp import PropsSI
 import constants as c
@@ -36,9 +39,6 @@ def two_stage_contra(phi1, psi1, R1, R2, exit_swirl, rpm1, geom, T01, P01, mdot,
     ang_out = np.array([np.rad2deg(alpha2), np.rad2deg(-beta3), np.rad2deg(beta4)])
     if angles_only:
         return dict(xi=ang_in / ang_out, turning=ang_in + ang_out, exit_deg=ang_out)
-
-    # Station 1
-    
 
     # Thermo loop
     P_exit = P01 / P01_Pe
@@ -262,6 +262,8 @@ def two_stage_contra(phi1, psi1, R1, R2, exit_swirl, rpm1, geom, T01, P01, mdot,
 
     return dict(eta_ts=eta_ts, U1=U1, U2=U2, rpm2=rpm2, r=r, P4=P4, Yp_s=Yp_s, Yp_r1=Yp_r1, Yp_r2=Yp_r2,
                 heights=(height1, height2, height3, height4), AN2_r1=AN2_r1, AN2_r2=AN2_r2,
+                U_tip=(abs(U1) * (r + max(height2, height3) / 2) / r, abs(U2) * (r + max(height3, height4) / 2) / r),
+                hub_tip=tuple((r - h / 2) / (r + h / 2) for h in (height1, height2, height3, height4)),
                 xi=ang_in / ang_out, turning=ang_in + ang_out, exit_deg=ang_out,
                 M_in=(Cx / a1, M2r, W3_2 / a3), M_out=(M2, M3r, M4r), R1_static=R1_static, dh_split=dh_split,
                 report=dict(stations=stations, rows=rows, stage=stage))

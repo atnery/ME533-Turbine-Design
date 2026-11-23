@@ -177,7 +177,8 @@ def ko_losses(V, G, F, B, E, loss_select):
             Y_clearance = out_p0 * (np.exp(dEta * dh0 * rhoOut / out_p) - 1) / (out_p0 - out_p)
 
     # ---- 4. Trailing edge loss ----------------------------------------
-    if 4 in loss_select and M_out <= 1: # Supersonic TE loss included in fMa
+    if 4 in loss_select:
+        M_te = min(M_out, 1.0) # Held at M=1 when supersonic, fMa adds the rest
         # Kacker–Okapuu Fig. 14: trailing-edge energy loss coefficient vs t/o (valid 0 <= t/o <= 0.4)
         dPhi2Reaction = 1.5702*t_o**2 - 2.5076*t_o**3 + 1.9376*t_o**4   # axial-entry nozzle (beta1 = 0)
         dPhi2Impulse  = 0.8385*t_o**2 - 1.4096*t_o**3 + 1.1127*t_o**4   # impulse blading (beta1 = alpha2)
@@ -186,10 +187,10 @@ def ko_losses(V, G, F, B, E, loss_select):
         dPhi2 = dPhi2Reaction + ratio * abs(ratio) * (dPhi2Impulse - dPhi2Reaction)
         if dPhi2 < 0 or dPhi2 >= 1:
             raise ValueError("Invalid trailing-edge empirical coefficient.")
-        num = (1 - (g-1)/2 * M_out**2 * (1 / (1 - dPhi2) - 1))**(-g/(g-1)) - 1
-        den = 1 - (1 + (g-1)/2 * M_out**2)**(-g/(g-1))
+        num = (1 - (g-1)/2 * M_te**2 * (1 / (1 - dPhi2) - 1))**(-g/(g-1)) - 1
+        den = 1 - (1 + (g-1)/2 * M_te**2)**(-g/(g-1))
         Y_trailing_edge = num/den
-
+    
     # ---- Total loss ---------------------------------------------------
     Y_total = Y_profile + Y_secondary + Y_clearance + Y_trailing_edge
     return Y_total, Y_profile, Y_secondary, Y_clearance, Y_trailing_edge, Y_shock
