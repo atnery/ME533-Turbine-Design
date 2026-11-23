@@ -17,7 +17,7 @@ LIMITS = dict(
     M_out=1.17,              # exit (relative) Mach, KO data up to 1.17
     M_in=0.8,                # inlet (relative) Mach
     AN2=3.2e7,               # m^2 rpm^2, both rotors
-    U_tip=500.0,             # m/s, both rotors
+    U_mean=500.0,            # m/s, mean blade speed, both rotors
     hub_tip=(0.7, 0.94),     # all stations
 )
 

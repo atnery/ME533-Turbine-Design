@@ -7,7 +7,8 @@ Each sweep produces five figure grids:
     3) thermo state : P2, P02, P03 (top row) and T2, T3, T02, T03 (bottom row)
     4) angles/losses: absolute flow angles alpha2, alpha3 and KO loss coefficients Y_s, Y_r
     5) structural   : N [rpm], r_mean3, annulus areas A1/A2/A3 and AN^2 at stator inlet (1), stator exit (2), rotor exit (3)
-Designs with AN^2 above AN2_LIMIT at ANY of the three stations are omitted (NaN) from every plot when ENFORCE_AN2 = True;
+Designs with AN^2 above AN2_LIMIT at ANY of the three stations, mean blade speed above U_MAX or hub/tip outside HUB_TIP
+are omitted (NaN) from every plot when ENFORCE_AN2 = True;
 the AN^2 panels still show the raw values (red dashed = limit) so you can see where each station crosses it.
 Non-converged cases come back as NaN and show up as gaps (line plots) or grey cells (maps).
 Two more analyses at the end of the script:
@@ -18,18 +19,21 @@ Two more analyses at the end of the script:
                        with the peak-eta_ts point of each U marked
 Run:  python test_turbine.py   (needs single_stage.py and KO_losses.py in the same folder)
 """
+import os
 import numpy as np
 import matplotlib.pyplot as plt
-from single_stage import single_stage_turbine, OUTPUT_NAMES
+from single_stage import single_stage_turbine, OUTPUT_NAMES, DEFAULT_GEOM
 
 SAVE_FIGS = False   # set True to also write every figure to a PNG
 
 # ------------------------- Baseline inputs -------------------------
-BASE = dict(T01=1850.0, P01=20*(10**5), mdot_core=30.0, mdot_cool=2.0, reac=0.6, r_hub=0.30, U=450.0, phi=0.5) # Baseline design inputs
+BASE = dict(T01=1850.0, P01=20*(10**5), mdot_core=30.0, mdot_cool=0.0, reac=0.6, r_hub=0.30, U=450.0, phi=0.5) # Baseline design inputs
 PR = 4.1                                        # P01/P3 (held fixed)
 AN2_LIMIT = 3.2e7                               # structural limit on A*N^2 [m^2 rpm^2], applied at stations 1, 2 and 3
 RAW_KEYS = ["AN2_1_raw", "AN2_2_raw", "AN2_3_raw"]   # unmasked AN^2 values kept for the AN^2 panels
-ENFORCE_AN2 = True                              # True -> omit designs that exceed AN2_LIMIT
+ENFORCE_AN2 = True                              # True -> omit designs outside any limit (AN^2, blade speed, hub/tip)
+U_MAX = 500.0                                   # mean blade speed limit [m/s]
+HUB_TIP = (0.7, 0.94)                           # hub/tip ratio range, applied at stations 1, 2 and 3
 SCALARS = [n for n in OUTPUT_NAMES if n != "sol"]
 
 # Preflight: run the baseline once with debug=True so a failing KO call prints its real error
@@ -52,8 +56,11 @@ def run(**over):
     for i in (1, 2, 3):
         r[f"AN2_{i}_raw"] = r[f"AN2_{i}"]                       # unmasked, for the AN^2 panels
     an2_max = np.nanmax([r["AN2_1"], r["AN2_2"], r["AN2_3"]]) if not np.isnan(r["AN2_3"]) else np.nan
-    # status: 0 = no solution, 1 = feasible, 2 = converged but AN^2 > limit at any station
-    r["status"] = 0 if np.isnan(an2_max) else (2 if an2_max > AN2_LIMIT else 1)
+    r_tip = np.sqrt(np.array([r["A1"], r["A2"], r["A3"]]) / np.pi + p["r_hub"]**2)
+    r["HT_min"], r["HT_max"] = p["r_hub"] / r_tip.max(), p["r_hub"] / r_tip.min()
+    outside = an2_max > AN2_LIMIT or p["U"] > U_MAX or not (HUB_TIP[0] <= r["HT_min"] and r["HT_max"] <= HUB_TIP[1])
+    # status: 0 = no solution, 1 = feasible, 2 = converged but outside a limit (AN^2, blade speed, hub/tip)
+    r["status"] = 0 if np.isnan(an2_max) else (2 if outside else 1)
     if ENFORCE_AN2 and r["status"] == 2:
         for k in r:
             if k not in RAW_KEYS and k != "status":
@@ -195,7 +202,7 @@ for a, data_, lab in zip(ax[0], [eta_tt, eta, psi],
 
 # Row 2: status map, highest AN^2 over stations 1, 2, 3, (blank)
 ax[1, 0].pcolormesh(reg, phg, status, cmap=ListedColormap(["#d9534f", "#5cb85c", "#f0ad4e"]), vmin=-0.5, vmax=2.5, shading="nearest")
-ax[1, 0].set_title("Red = no solution, green = feasible, orange = AN^2 > limit")
+ax[1, 0].set_title("Red = no solution, green = feasible, orange = outside limits")
 
 # Highest AN^2 over stations 1, 2, 3 (actual values, including the designs that violate the limit)
 cmap_an = plt.get_cmap("plasma").copy(); cmap_an.set_bad("lightgrey")
@@ -216,9 +223,9 @@ if SAVE_FIGS:
     fig.savefig("map_reaction_vs_phi.png", dpi=150)
 
 n_all = status.size
-print(f"AN^2 limit applied at stator inlet, stator exit and rotor exit.")
+print(f"Limits: AN^2 <= {AN2_LIMIT:.1e} and hub/tip {HUB_TIP[0]}-{HUB_TIP[1]} at stations 1, 2, 3; mean blade speed <= {U_MAX:.0f} m/s")
 print(f"Map ({n_all} cases): {int(np.sum(status == 1))} feasible, "
-      f"{int(np.sum(status == 2))} violate AN^2 <= {AN2_LIMIT:.1e}, {int(np.sum(status == 0))} no solution")
+      f"{int(np.sum(status == 2))} outside limits, {int(np.sum(status == 0))} no solution")
 print(f"Peak eta_tt on the map: {np.nanmax(eta_tt):.3f}   Peak eta_ts: {np.nanmax(eta):.3f}")
 print(f"Highest AN^2 on the map: {np.nanmax(an2_max):.3e}  (limit {AN2_LIMIT:.1e})")
 
@@ -232,7 +239,7 @@ PEAK_KEYS = ("eta_ts", "eta_tt", "psi", "Y_s", "Y_r")
 
 
 def eval_points(U, reacs, phis):
-    """Run every (reaction, phi) pair at blade speed U. Keeps only converged, AN^2-feasible designs."""
+    """Run every (reaction, phi) pair at blade speed U. Keeps only converged designs within all limits."""
     pts = []
     for ph in phis:
         for rc in reacs:
@@ -269,7 +276,7 @@ for U_i in PEAK_U_LIST:
         peaks.append(dict(U=U_i, reac=np.nan, phi=np.nan, **{k: np.nan for k in PEAK_KEYS}))
 
 print(f"\nPeak total-to-static efficiency for each blade speed "
-      f"(reaction {PEAK_REAC[0]:.2f}-{PEAK_REAC[-1]:.2f}, phi {PEAK_PHI[0]:.2f}-{PEAK_PHI[-1]:.2f}, AN^2 limit "
+      f"(reaction {PEAK_REAC[0]:.2f}-{PEAK_REAC[-1]:.2f}, phi {PEAK_PHI[0]:.2f}-{PEAK_PHI[-1]:.2f}, limits "
       f"{'enforced' if ENFORCE_AN2 else 'not enforced'})")
 print(f"{'U [m/s]':>8} {'reaction':>9} {'phi':>6} {'psi':>6} {'eta_ts':>7} {'eta_tt':>7} {'Y_s':>7} {'Y_r':>7}")
 for p in peaks:
@@ -278,6 +285,91 @@ for p in peaks:
           f"{p['eta_tt']:7.4f} {p['Y_s']:7.4f} {p['Y_r']:7.4f}{flag}")
 if any((not np.isnan(p["eta_ts"])) and on_edge(p) for p in peaks):
     print("* = peak sits on the edge of the search range -> widen PEAK_REAC / PEAK_PHI")
+
+# ======================= Optimum design CSV =======================
+M2IN = 1 / 0.0254   # m -> in
+
+
+def ff(x, d):
+    """Fixed-point string with d decimals, blank for NaN."""
+    if x is None or not np.isfinite(x):
+        return ""
+    return f"{0.0 if round(x, d) == 0 else x:.{d}f}"
+
+
+def write_optimum_csv(best, fname="single_stage_optimum.csv"):
+    """Re-run the peak eta_ts design and write station, blade row and stage tables (dimensions in inches)."""
+    p = {**BASE, "U": best["U"], "reac": best["reac"], "phi": best["phi"]}
+    out = single_stage_turbine(p["T01"], p["P01"], p["P01"] / PR, p["mdot_core"], p["mdot_cool"],
+                               p["reac"], p["r_hub"], p["U"], phi=p["phi"], AN2_max=None)
+    r = dict(zip(OUTPUT_NAMES, out))
+    s, gm, nan = r["sol"], DEFAULT_GEOM, np.nan
+    mdot = p["mdot_core"] - p["mdot_cool"]                 # stage flow, as in single_stage_turbine
+    U, Vx, N, P3 = p["U"], s["V1"], r["N_rpm"], p["P01"] / PR
+
+    # Stations 1, 2, 3 (constant hub radius)
+    A = np.array([r["A1"], r["A2"], r["A3"]])
+    rh = p["r_hub"]
+    rt = np.sqrt(A / np.pi + rh**2)
+    h, rm = rt - rh, (rh + rt) / 2
+    alpha = np.array([0.0, r["alpha2"], r["alpha3"]])
+    C = Vx / np.cos(np.radians(alpha))
+    T = np.array([s["T1"], r["T2"], r["T3"]])
+    a = C[1] / r["M2"] * np.sqrt(T / T[1])                 # speed of sound, single gamma as in the model
+    Wrel = Vx / np.cos(np.radians([r["beta2"], r["beta3"]]))
+    stations = [("P0", "PA", [p["P01"], r["P02"], r["P03"]], 0), ("P", "PA", [s["P1"], r["P2"], P3], 0),
+                ("T0", "K", [p["T01"], r["T02"], r["T03"]], 1), ("T", "K", T, 1),
+                ("RHO", "KG/M3", mdot / (A * Vx), 4),
+                ("C", "M/S", C, 1), ("CX", "M/S", [Vx] * 3, 1), ("CTHETA", "M/S", Vx * np.tan(np.radians(alpha)), 1),
+                ("ALPHA", "DEG", alpha, 2), ("MACH", "-", C / a, 4),
+                ("W", "M/S", [nan, *Wrel], 1), ("BETA", "DEG", [nan, r["beta2"], r["beta3"]], 2),
+                ("MREL", "-", [nan, r["M2R"], r["M3R"]], 4),
+                ("P0REL", "PA", [nan, s["P02R"], s["P03R"]], 0), ("T0REL", "K", [nan, s["T02R"], s["T03R"]], 1),
+                ("AREA", "IN2", A * M2IN**2, 2), ("HEIGHT", "IN", h * M2IN, 3),
+                ("D HUB", "IN", 2 * np.full(3, rh) * M2IN, 3), ("D MEAN", "IN", 2 * rm * M2IN, 3),
+                ("D TIP", "IN", 2 * rt * M2IN, 3),
+                ("HUB/TIP", "-", rh / rt, 4),
+                ("AN2", "IN2RPM2", np.array([r["AN2_1"], r["AN2_2"], r["AN2_3"]]) * M2IN**2, 0)]
+
+    # Blade rows: chord from the exit height, as passed to the KO model
+    chord = h[1:] / gm["h_over_c"]
+    pitch = gm["s_over_c"] * chord
+    ang_in, ang_out = np.array([0.0, r["beta2"]]), np.array([r["alpha2"], -r["beta3"]])
+    Y = np.array([s["Y_s_all"], s["Y_r_all"]])           # cols: total, profile, secondary, clearance, TE, shock
+    rows = [("H INLET", "IN", h[:2] * M2IN, 3), ("H EXIT", "IN", h[1:] * M2IN, 3),
+            ("CHORD", "IN", chord * M2IN, 3), ("AX CHORD", "IN", gm["ax_over_c"] * chord * M2IN, 3),
+            ("PITCH", "IN", pitch * M2IN, 3), ("S/C", "-", [gm["s_over_c"]] * 2, 4),
+            ("BLADES", "-", np.ceil(2 * np.pi * rm[1:] / pitch), 0),
+            ("TMAX", "IN", gm["tmax_over_c"] * chord * M2IN, 3),
+            ("TIP CLR", "IN", [nan, gm["clearance_over_h"] * h[2] * M2IN], 4),
+            ("ANG IN", "DEG", ang_in, 2), ("ANG OUT", "DEG", ang_out, 2), ("TURNING", "DEG", ang_in + ang_out, 2),
+            ("XI", "-", ang_in / ang_out, 4), ("M IN", "-", [C[0] / a[0], r["M2R"]], 4), ("M OUT", "-", [r["M2"], r["M3R"]], 4),
+            ("Y PROFILE", "-", Y[:, 1], 5), ("  SHOCK", "-", Y[:, 5], 5), ("Y SECOND", "-", Y[:, 2], 5),
+            ("Y CLEAR", "-", Y[:, 3], 5), ("Y TE", "-", Y[:, 4], 5), ("Y TOTAL", "-", Y[:, 0], 5),
+            ("RPM", "RPM", [0.0, N], 0)]
+
+    stage = [("REACTION", "-", p["reac"], 4), ("PHI", "-", p["phi"], 4), ("PSI", "-", r["W"] / U**2, 4),
+             ("U", "M/S", U, 2), ("U TIP", "M/S", 2 * np.pi * N / 60 * rt[1:].max(), 2),
+             ("DH0", "J/KG", r["W"], 0), ("POWER", "KW", mdot * r["W"] / 1e3, 1),
+             ("MDOT CORE", "KG/S", p["mdot_core"], 3), ("MDOT COOL", "KG/S", p["mdot_cool"], 3),
+             ("MDOT STAGE", "KG/S", mdot, 3), ("T01", "K", p["T01"], 1), ("P01", "PA", p["P01"], 0),
+             ("P01/P3", "-", PR, 3), ("ETA TS", "-", r["eta_ts"], 4), ("ETA TT", "-", r["eta_tt"], 4)]
+
+    lines = [["STATION RESULTS", "UNITS", "1", "2", "3"]]
+    lines += [[n, u] + [ff(v, d) for v in vals] for n, u, vals, d in stations]
+    lines += [[], ["BLADE ROW RESULTS", "UNITS", "STATOR", "ROTOR"]]
+    lines += [[n, u] + [ff(v, d) for v in vals] for n, u, vals, d in rows]
+    lines += [[], ["STAGE RESULTS", "UNITS", "VALUE"]]
+    lines += [[n, u, ff(v, d)] for n, u, v, d in stage]
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), fname)
+    with open(path, "w", newline="") as f:
+        f.write("\r\n".join(",".join(l) for l in lines) + "\r\n")
+    print(f"Optimum design (U = {U:.0f} m/s, reaction = {p['reac']:.3f}, phi = {p['phi']:.3f}) written to {fname}")
+
+
+best_pk = max((p for p in peaks if not np.isnan(p["eta_ts"])), key=lambda p: p["eta_ts"], default=None)
+if best_pk is not None:
+    write_optimum_csv(best_pk)
 
 # ---- Figure: peak conditions vs U ----
 pk = {k: np.array([p[k] for p in peaks]) for k in ("U", "reac", "phi", "psi", "eta_ts", "eta_tt", "Y_s", "Y_r")}

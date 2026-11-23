@@ -37,7 +37,7 @@ def _ko_Y(row, V_in, ang_in, V_out, ang_out, P0_in, P_in, P0_out, P_out,
           T_in, T_out, rho_out, mu_out, height, r_tip, r_hub, gamma, R, geom, dh0, loss_select):
     """
     Wrapper around ko_losses. Angles in degrees; for a rotor pass RELATIVE velocities/angles/pressures.
-    Returns Y_total only (first element of the tuple ko_losses returns).
+    Returns the ko_losses tuple (Y_total, Y_profile, Y_secondary, Y_clearance, Y_trailing_edge, Y_shock).
     """
     chord = height / geom['h_over_c']
     V = [V_in, ang_in, P0_in, P_in, V_out, ang_out, P0_out, P_out]
@@ -45,7 +45,7 @@ def _ko_Y(row, V_in, ang_in, V_out, ang_out, P0_in, P_in, P0_out, P_out,
          geom['ax_over_c'] * chord, height, geom['clearance_over_h'] * height, geom['s_over_c'], geom['te_over_o']]
     F = [np.sqrt(gamma * R * T_in), np.sqrt(gamma * R * T_out), rho_out, mu_out, gamma]
     B = [row, geom['shrouded']]
-    return float(ko_losses(V, G, F, B, dh0, loss_select)[0])
+    return tuple(float(y) for y in ko_losses(V, G, F, B, dh0, loss_select))
 
 
 def _evaluate(n_th, T01, P01, P3, reac, U, gamma, R, Cp1, Cp3, T3s, V1, P1, fld,
@@ -113,9 +113,10 @@ def _evaluate(n_th, T01, P01, P3, reac, U, gamma, R, Cp1, Cp3, T3s, V1, P1, fld,
         T1 = T01 - V1**2 / (2 * Cp1) # Static temperature at stator inlet, K
 
         P02_guess = P2 * (T02 / T2) ** g # Stagnation pressure at stator exit (guess)
-        Y_s = _ko_Y('stator', V1, 0.0, V2, alpha2, P01, P1, P02_guess, P2,
-                    T1, T2, rho2, mu2, h2, r_tip2, r_hub,
-                    gamma, R, geom, 0.0, loss_select) #  KO stator loss coefficient (dh0 unused for a stator)
+        Y_s_all = _ko_Y('stator', V1, 0.0, V2, alpha2, P01, P1, P02_guess, P2,
+                        T1, T2, rho2, mu2, h2, r_tip2, r_hub,
+                        gamma, R, geom, 0.0, loss_select) #  KO stator loss coefficient (dh0 unused for a stator)
+        Y_s = Y_s_all[0]
         P02 = (P01 + Y_s * P2) / (1 + Y_s)           # from Y = (P01-P02)/(P02-P2)
         P2_new = P02 / ((T02 / T2) ** g)                # static P2 consistent with actual V2
         if abs(P2_new - P2) / P2 < TOL_P2:
@@ -139,8 +140,9 @@ def _evaluate(n_th, T01, P01, P3, reac, U, gamma, R, Cp1, Cp3, T3s, V1, P1, fld,
     h3 = r_tip3 - r_hub
 
     # KO angle convention: inlet CCW+, exit CW+ -> rotor exit relative angle enters with flipped sign
-    Y_r = _ko_Y('rotor', W2, beta2, W3, -beta3, P02R, P2, P03R_guess, P3,
-                T2, T3, rho3, mu3, h3, r_tip3, r_hub, gamma, R, geom, W, loss_select)   # dh0 = rotor work = stage work W
+    Y_r_all = _ko_Y('rotor', W2, beta2, W3, -beta3, P02R, P2, P03R_guess, P3,
+                    T2, T3, rho3, mu3, h3, r_tip3, r_hub, gamma, R, geom, W, loss_select)   # dh0 = rotor work = stage work W
+    Y_r = Y_r_all[0]
     P03R = (P02R + Y_r * P3) / (1 + Y_r)
     P3_calc = P03R / (T03R / T3) ** g                 # exit static pressure implied by losses
 
@@ -154,7 +156,7 @@ def _evaluate(n_th, T01, P01, P3, reac, U, gamma, R, Cp1, Cp3, T3s, V1, P1, fld,
                 A2=A2, A3=A3, h2=h2, h3=h3, Y_s=Y_s, Y_r=Y_r,
                 alpha2=alpha2, beta2=beta2, beta3=beta3,
                 M2=M2, M2R=M2R, M3=M3, M3R=M3R, T02=T02, alpha3=alpha3,
-                P02R=P02R, T02R=T02R, P03R=P03R, T03R=T03R)
+                P02R=P02R, T02R=T02R, P03R=P03R, T03R=T03R, Y_s_all=Y_s_all, Y_r_all=Y_r_all)
 
 # Function to calculate the exit flow conditions of a single-stage turbine using the Kacker-Okapuu loss model
 
@@ -259,7 +261,7 @@ def single_stage_turbine(T01, P01, P3, mdot_core, mdot_cool, reac, r_hub, U,
     r_mean3 = 0.5 * (r_hub + r_tip3)                 # rotor exit mean radius (U is taken at this radius)
     N_rpm = 60.0 * U / (2 * np.pi * r_mean3)         # single shaft speed [rpm]
     AN2_1, AN2_2, AN2_3 = A1 * N_rpm**2, A2 * N_rpm**2, A3 * N_rpm**2   # [m^2 rpm^2]
-    sol.update(A1=A1, N_rpm=N_rpm, r_mean3=r_mean3, AN2_1=AN2_1, AN2_2=AN2_2, AN2_3=AN2_3)
+    sol.update(A1=A1, N_rpm=N_rpm, r_mean3=r_mean3, AN2_1=AN2_1, AN2_2=AN2_2, AN2_3=AN2_3, T1=T1, P1=P1, V1=V1)
     if AN2_max is not None:
         over = [(name, val) for name, val in (("stator inlet", AN2_1), ("stator exit", AN2_2), ("rotor exit", AN2_3))
                 if val > AN2_max]

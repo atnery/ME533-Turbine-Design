@@ -1,3 +1,4 @@
+import os
 import numpy as np
 from CoolProp.CoolProp import PropsSI
 import constants as c
@@ -9,7 +10,6 @@ from baseline import BASELINE, OPERATING, GEOM, LIMITS, R1_LINES
 from multiprocessing import Pool
 from functools import partial
 from itertools import product
-import os
 
 def evaluate(x, geom, T01, P01, mdot, P0_Pe, fluid):
     try:
@@ -18,8 +18,7 @@ def evaluate(x, geom, T01, P01, mdot, P0_Pe, fluid):
         return None
 
 def main():
-    os.chdir(os.path.dirname(os.path.abspath(__file__))) 
-
+    os.chdir(os.path.dirname(os.path.abspath(__file__))) # Write outputs next to this script
     # Operating conditions and geometry (baseline.py)
     fluid, T01, P01, P0_Pe, mdot = (OPERATING[k] for k in ("fluid", "T01", "P01", "P0_Pe", "mdot"))
     DEFAULT_GEOM = GEOM
@@ -30,12 +29,12 @@ def main():
     R1_range = np.linspace(0.0, 1.0, 11)
     R2_range = np.linspace(0.0, 1.0, 11)
     exit_range = np.radians(np.linspace(0, 0, 1))
-    rpm1_range = np.linspace(10000, 24000, 6)
+    rpm1_range = np.linspace(14000, 24000, 6)
 
     # Valid ranges (baseline.py)
     XI_RANGE, TURN_RANGE, EXIT_RANGE = LIMITS["xi"], LIMITS["turning"], LIMITS["exit"]
     M_OUT_MAX, M_IN_MAX, AN2_MAX = LIMITS["M_out"], LIMITS["M_in"], LIMITS["AN2"]
-    U_TIP_MAX, HT_RANGE = LIMITS["U_tip"], LIMITS["hub_tip"]
+    U_MAX, HT_RANGE = LIMITS["U_mean"], LIMITS["hub_tip"]
 
     def angles_ok(o):
         return (np.all((o["xi"] >= XI_RANGE[0]) & (o["xi"] <= XI_RANGE[1]))
@@ -44,7 +43,7 @@ def main():
 
     def limits_ok(o):
         return (max(o["M_out"]) <= M_OUT_MAX and max(o["M_in"]) <= M_IN_MAX
-                and max(o["AN2_r1"], o["AN2_r2"]) <= AN2_MAX and max(o["U_tip"]) <= U_TIP_MAX
+                and max(o["AN2_r1"], o["AN2_r2"]) <= AN2_MAX and max(abs(o["U1"]), abs(o["U2"])) <= U_MAX
                 and HT_RANGE[0] <= min(o["hub_tip"]) and max(o["hub_tip"]) <= HT_RANGE[1])
 
     # Pre-filter on velocity-triangle angles (no thermodynamics needed)
@@ -118,12 +117,12 @@ def main():
 
     phi_fine = np.linspace(0.3, 1.0, 29)
     recs = fine_sweep([(p, b["psi1"], r, b["R2"], ex, b["rpm1"]) for r in R1_LINES for p in phi_fine])
-    plot_vs(recs, 0, "Flow coefficient φ1", b["phi1"], M_OUT_MAX, M_IN_MAX, AN2_MAX, tag="phi", x_opt=best["phi1"], u_max=U_TIP_MAX,
+    plot_vs(recs, 0, "Flow coefficient φ1", b["phi1"], M_OUT_MAX, M_IN_MAX, AN2_MAX, tag="phi", x_opt=best["phi1"], u_max=U_MAX,
             title=f"Flow coefficient sweep (baseline ψ1 = {b['psi1']:.2f}, R2 = {b['R2']:.2f}, rpm1 = {b['rpm1']:.0f}, {cond})")
 
     rpm_fine = np.linspace(10000, 26000, 33)
     recs = fine_sweep([(b["phi1"], b["psi1"], r, b["R2"], ex, n) for r in R1_LINES for n in rpm_fine])
-    plot_vs(recs, 5, "Rotor 1 speed [rpm]", b["rpm1"], M_OUT_MAX, M_IN_MAX, AN2_MAX, tag="rpm", x_opt=best["rpm1"], u_max=U_TIP_MAX,
+    plot_vs(recs, 5, "Rotor 1 speed [rpm]", b["rpm1"], M_OUT_MAX, M_IN_MAX, AN2_MAX, tag="rpm", x_opt=best["rpm1"], u_max=U_MAX,
             title=f"Speed sweep (baseline φ1 = {b['phi1']:.2f}, ψ1 = {b['psi1']:.2f}, R2 = {b['R2']:.2f}, {cond})")
     plt.show()
 

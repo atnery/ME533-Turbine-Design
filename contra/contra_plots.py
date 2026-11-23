@@ -29,7 +29,7 @@ def _perf_panels(m_out_max, m_in_max, an2_max, u_max=None):
         ("Total-to-total efficiency", lambda o: st(o)["eta_tt"], None),
         ("Total-to-static efficiency", lambda o: o["eta_ts"], None),
         ("Specific work [kJ/kg]", lambda o: (st(o)["dh0_r1"] + st(o)["dh0_r2"]) / 1e3, None),
-        ("Max rotor tip speed [m/s]", lambda o: max(o["U_tip"]), u_max),
+        ("Max rotor mean blade speed |U| [m/s]", lambda o: max(abs(o["U1"]), abs(o["U2"])), u_max),
         ("Stator exit blade height h2 [in]", lambda o: sn(o)["h"][1] * M2IN, None),
         ("Rotor 2 exit blade height h4 [in]", lambda o: sn(o)["h"][3] * M2IN, None),
         ("Mean diameter [in]", lambda o: 2 * st(o)["r"] * M2IN, None),
