@@ -4,6 +4,7 @@ import traceback
 import numpy as np
 from CoolProp.CoolProp import PropsSI
 from KO_losses import ko_losses
+from scipy.optimize import root_scalar
 
 MAX_ITER = 100      # Max iterations for BOTH loops
 TOL_P3 = 1e-4       # Relative tolerance on exit static pressure match (outer loop)
@@ -11,11 +12,18 @@ TOL_P2 = 1e-6       # Relative tolerance on stator exit pressure (inner loop)
 AN2_MAX_DEFAULT = 3.2e7   # Structural limit on A*N^2 at stator inlet, stator exit AND rotor exit [m^2 rpm^2]
 
 # Order of the values returned by single_stage_turbine (last entry is the full results dict)
-OUTPUT_NAMES = ["T03", "P03", "eta_tt", "eta_ts", "W", "A2", "A3", "h2", "h3",
-                "Y_s", "Y_r", "alpha2", "beta2", "beta3",
-                "M2", "M2R", "M3", "M3R",
-                "P2", "T2", "T3", "P02", "T02", "alpha3",
-                "N_rpm", "r_mean3", "A1", "AN2_1", "AN2_2", "AN2_3", "sol"]
+OUTPUT_NAMES = [
+    "T03", "P03", "eta_tt", "eta_ts", "W",
+    "A2", "A3", "h2", "h3",
+    "Y_s", "Y_r", "alpha2", "beta2", "beta3",
+    "M2", "M2R", "M3", "M3R",
+    "P2", "T2", "T3", "P02", "T02", "alpha3",
+    "N_rpm",
+    "h2_geom", "h3_geom",
+    "r_hub2", "r_tip2",
+    "r_hub3", "r_tip3",
+    "A1", "AN2_1", "AN2_2", "AN2_3","sol"
+]
 
 # Blade geometry NOT supplied by the caller is derived from these ratios (preliminary design values)
 DEFAULT_GEOM = dict(
@@ -47,9 +55,12 @@ def _ko_Y(row, V_in, ang_in, V_out, ang_out, P0_in, P_in, P0_out, P_out,
     B = [row, geom['shrouded']]
     return tuple(float(y) for y in ko_losses(V, G, F, B, dh0, loss_select))
 
+def blade_dim_func(h,r_mean):
+    # Function to compute row cross sectional area given blade half height
+    return (((r_mean + h)**2 - r_mean**2) + (r_mean**2 - (r_mean - h)**2))*np.pi
 
 def _evaluate(n_th, T01, P01, P3, reac, U, gamma, R, Cp1, Cp3, T3s, V1, P1, fld,
-              mdot, r_hub, geom, loss_select):
+              mdot, r_mean, geom, loss_select):
     """
     One full pass of the stage for a given assumed efficiency n_th.
     Contains the INNER loop (stator exit pressure P2 with KO stator losses).
@@ -61,6 +72,9 @@ def _evaluate(n_th, T01, P01, P3, reac, U, gamma, R, Cp1, Cp3, T3s, V1, P1, fld,
     V2x = V3x = V1 # Constant axial velocity across blade rows
     W2x = V2x 
     T02 = T01 # Adiabatic stator exit total temperature (K)
+
+    # print(T02)
+    # input("enter")
 
     # Actual work from assumed total-static efficiency (n_th relative to isentropic drop T01 -> T3s)
     T03 = T01 - n_th * (T01 - T3s)
@@ -101,6 +115,9 @@ def _evaluate(n_th, T01, P01, P3, reac, U, gamma, R, Cp1, Cp3, T3s, V1, P1, fld,
         return None
     T2 = T3 + reac * W / Cp_avg # Update T2 based on the converged T3
 
+    # print(T2)
+    # input("enter")
+
     # ---------------- INNER LOOP: stator exit pressure P2 with KO losses ----------------
     P2 = (P1 + P3)/2  # initial guess
     converged = False
@@ -108,13 +125,25 @@ def _evaluate(n_th, T01, P01, P3, reac, U, gamma, R, Cp1, Cp3, T3s, V1, P1, fld,
         rho2 = PropsSI('D', 'T', T2, 'P', P2, fld) # Density at stator exit
         mu2 = PropsSI('V', 'T', T2, 'P', P2, fld) # Viscosity at stator exit
         A2 = mdot / (rho2 * V2x) # Annular flow area at stator exit
-        r_tip2 = np.sqrt(A2 / np.pi + r_hub**2) # Tip radius at stator exit
-        h2 = r_tip2 - r_hub # Blade height at stator exit
+
+        # print(rho2)
+        # print(A2)
+        # input("enter")
+
+        residual2 = lambda x: blade_dim_func(x,r_mean) - A2
+        sol = root_scalar(residual2,bracket=(0,0.20),method='brentq') # Solves for half height of blade given A2
+        h2 = 2*sol.root
+
+        # print(h2)
+        # input("enter")
+        
+        r_tip2 = r_mean + h2/2
+        r_hub2 = r_mean - h2/2
         T1 = T01 - V1**2 / (2 * Cp1) # Static temperature at stator inlet, K
 
         P02_guess = P2 * (T02 / T2) ** g # Stagnation pressure at stator exit (guess)
         Y_s_all = _ko_Y('stator', V1, 0.0, V2, alpha2, P01, P1, P02_guess, P2,
-                        T1, T2, rho2, mu2, h2, r_tip2, r_hub,
+                        T1, T2, rho2, mu2, h2, r_tip2, r_hub2,
                         gamma, R, geom, 0.0, loss_select) #  KO stator loss coefficient (dh0 unused for a stator)
         Y_s = Y_s_all[0]
         P02 = (P01 + Y_s * P2) / (1 + Y_s)           # from Y = (P01-P02)/(P02-P2)
@@ -136,12 +165,18 @@ def _evaluate(n_th, T01, P01, P3, reac, U, gamma, R, Cp1, Cp3, T3s, V1, P1, fld,
     rho3 = PropsSI('D', 'T', T3, 'P', P3, fld)
     mu3 = PropsSI('V', 'T', T3, 'P', P3, fld)
     A3 = mdot / (rho3 * V3x)
-    r_tip3 = np.sqrt(A3 / np.pi + r_hub**2)
-    h3 = r_tip3 - r_hub
+    residual3 = lambda x: blade_dim_func(x,r_mean) - A3
+    sol = root_scalar(residual3,bracket=(0,0.20),method='brentq') # Solves for half height of blade given A3
+    h3 = 2*sol.root
+    # print(h3)
+    # input("enter")
+
+    r_tip3 = r_mean + h3/2
+    r_hub3 = r_mean - h3/2
 
     # KO angle convention: inlet CCW+, exit CW+ -> rotor exit relative angle enters with flipped sign
     Y_r_all = _ko_Y('rotor', W2, beta2, W3, -beta3, P02R, P2, P03R_guess, P3,
-                    T2, T3, rho3, mu3, h3, r_tip3, r_hub, gamma, R, geom, W, loss_select)   # dh0 = rotor work = stage work W
+                    T2, T3, rho3, mu3, h3, r_tip3, r_hub3, gamma, R, geom, W, loss_select)   # dh0 = rotor work = stage work W
     Y_r = Y_r_all[0]
     P03R = (P02R + Y_r * P3) / (1 + Y_r)
     P3_calc = P03R / (T03R / T3) ** g                 # exit static pressure implied by losses
@@ -160,7 +195,7 @@ def _evaluate(n_th, T01, P01, P3, reac, U, gamma, R, Cp1, Cp3, T3s, V1, P1, fld,
 
 # Function to calculate the exit flow conditions of a single-stage turbine using the Kacker-Okapuu loss model
 
-def single_stage_turbine(T01, P01, P3, mdot_core, mdot_cool, reac, r_hub, U,
+def single_stage_turbine(T01, P01, P3, mdot_core, mdot_cool, reac, r_mean, U,
                          geom=None, loss_select=None, phi=None, M_inlet = 0.25, debug=False, AN2_max=AN2_MAX_DEFAULT):
     """
     Calculate the exit flow conditions of a single-stage turbine using the Kacker-Okapuu loss model.
@@ -217,7 +252,7 @@ def single_stage_turbine(T01, P01, P3, mdot_core, mdot_cool, reac, r_hub, U,
     Cp3 = PropsSI('C', 'T', T3s, 'P', P3, fld)
 
     args = (T01, P01, P3, reac, U, gamma, R, Cp1, Cp3, T3s, V1, P1, fld,
-            mdot_total, r_hub, geom, loss_select) # Aruments for _evaluate
+            mdot_total, r_mean, geom, loss_select) # Aruments for _evaluate
 
     def err(n): # Evaluate the relative error in exit static pressure for a given assumed efficiency n_th
         try:
@@ -257,11 +292,17 @@ def single_stage_turbine(T01, P01, P3, mdot_core, mdot_cool, reac, r_hub, U,
     rho1 = PropsSI('D', 'T', T1, 'P', P1, fld)       # stator inlet static density
     A1 = mdot_total / (rho1 * V1)                    # stator inlet annulus area
     A2, A3 = sol['A2'], sol['A3']                    # stator exit / rotor exit annulus areas
-    r_tip3 = np.sqrt(A3 / np.pi + r_hub**2)          # rotor exit tip radius
-    r_mean3 = 0.5 * (r_hub + r_tip3)                 # rotor exit mean radius (U is taken at this radius)
-    N_rpm = 60.0 * U / (2 * np.pi * r_mean3)         # single shaft speed [rpm]
+    h2, h3 = sol['h2'], sol['h3']                    # stator / rotor blade heights
+    
+    r_tip3 = r_mean + h3/2                           # rotor tip radius
+    r_hub3 = r_mean - h3/2                           # rotor hub radius
+
+    r_tip2 = r_mean + h2/2                           # stator tip radius
+    r_hub2 = r_mean - h2/2                           # stator hub radius
+
+    N_rpm = 60.0 * U / (2 * np.pi * r_mean)         # single shaft speed [rpm]
     AN2_1, AN2_2, AN2_3 = A1 * N_rpm**2, A2 * N_rpm**2, A3 * N_rpm**2   # [m^2 rpm^2]
-    sol.update(A1=A1, N_rpm=N_rpm, r_mean3=r_mean3, AN2_1=AN2_1, AN2_2=AN2_2, AN2_3=AN2_3, T1=T1, P1=P1, V1=V1)
+    sol.update(A1=A1, N_rpm=N_rpm, AN2_1=AN2_1, AN2_2=AN2_2, AN2_3=AN2_3, T1=T1, P1=P1, V1=V1)
     if AN2_max is not None:
         over = [(name, val) for name, val in (("stator inlet", AN2_1), ("stator exit", AN2_2), ("rotor exit", AN2_3))
                 if val > AN2_max]
@@ -284,4 +325,4 @@ def single_stage_turbine(T01, P01, P3, mdot_core, mdot_cool, reac, r_hub, U,
             sol['Y_s'], sol['Y_r'], sol['alpha2'], sol['beta2'], sol['beta3'],
             sol['M2'], sol['M2R'], sol['M3'], sol['M3R'],
             sol['P2'], sol['T2'], sol['T3'], sol['P02'], sol['T02'], sol['alpha3'],
-            N_rpm, r_mean3, A1, AN2_1, AN2_2, AN2_3, sol)
+            N_rpm, h2, h3, r_hub2, r_tip2, r_hub3, r_tip3, A1, AN2_1, AN2_2, AN2_3, sol)
