@@ -23,6 +23,7 @@ T01 = 1850 # Inlet stag. temperature, K
 r_mean = 0.275 # Arbritaraily chosen value (will change this to approach more reasonable design)
 PR = 4.1                                        # P01/P3 (held fixed)
 AN2_LIMIT = 3.2e7                               # structural limit on A*N^2 [m^2 rpm^2], applied at stations 1, 2 and 3
+M_inlet = 0.25 # Inlet mach number (arbritrary)
 
 # Target Speed
 U_target = 450 # Target blade rotational speed, m/s
@@ -52,7 +53,7 @@ output_names = [
     "h2_geom", "h3_geom",
     "r_hub2", "r_tip2",
     "r_hub3", "r_tip3",
-    "A1", "AN2_1", "AN2_2", "AN2_3"
+    "A1", "AN2_1", "AN2_2", "AN2_3", "sc_opt_s", "sc_opt_r"
 ]
 
 # Preallocate storage
@@ -153,7 +154,6 @@ ax.set_ylabel("Flow Coefficient ($V_x/U$)")
 plt.tight_layout()
 plt.show()
 
-
 import csv
 from CoolProp.CoolProp import PropsSI
 
@@ -183,6 +183,8 @@ best_output = single_stage_turbine(
 
 best = dict(zip(output_names, best_output[:-1]))
 sol = best_output[-1]
+sc_opt_s = best_output[-3]
+sc_opt_r = best_output[-2]
 
 if not sol:
     raise ValueError("Selected design could not be recomputed.")
@@ -268,22 +270,22 @@ Mach = [V[i] / a[i] for i in range(3)]
 
 # Relative velocity and angles
 Wrel = [
-    None,
+    V[0],
     best["M2R"] * a[1],
     best["M3R"] * a[2]
 ]
 
 beta = [
-    None,
+    0,
     best["beta2"],
     best["beta3"]
 ]
 
-Mrel = [None, best["M2R"], best["M3R"]]
+Mrel = [Mach[0], best["M2R"], best["M3R"]]
 
 # Relative total conditions
-P0rel = [None, sol["P02R"], sol["P03R"]]
-T0rel = [None, sol["T02R"], sol["T03R"]]
+P0rel = [P01, sol["P02R"], sol["P03R"]]
+T0rel = [T01, sol["T02R"], sol["T03R"]]
 
 # Annulus areas
 area = [A1, A2, A3]
@@ -313,6 +315,9 @@ hub_tip = [
 ]
 
 AN2 = [best["AN2_1"], best["AN2_2"], best["AN2_3"]]
+
+pitch = [chord_s*sc_opt_s,chord_r*sc_opt_r]
+BLADES = [np.ceil(2 * np.pi * r_mean / pitch[0]), np.ceil(2 * np.pi * r_mean / pitch[1])]
 
 # ---------------------------------------------------------
 # 4. Helper for formatting CSV values
@@ -380,12 +385,13 @@ blade_rows = [
      fmt(chord_r*geom["ax_over_c"]*M_TO_IN)],
 
     ["PITCH", "IN",
-     fmt(chord_s*geom["s_over_c"]*M_TO_IN),
-     fmt(chord_r*geom["s_over_c"]*M_TO_IN)],
+     fmt(chord_s*sc_opt_s*M_TO_IN),
+     fmt(chord_r*sc_opt_r*M_TO_IN)],
+     
 
-    ["S/C", "-", fmt(geom["s_over_c"]), fmt(geom["s_over_c"])],
+    ["S/C", "-", fmt(sc_opt_s), fmt(sc_opt_r)],
 
-    ["BLADES", "-", "", ""],
+    ["BLADES", "-", fmt(BLADES[0]), fmt(BLADES[1])],
 
     ["TMAX", "IN",
      fmt(chord_s*geom["tmax_over_c"]*M_TO_IN),
@@ -399,9 +405,9 @@ blade_rows = [
 
     ["TURNING", "DEG",
      fmt(abs(best["alpha2"])),
-     fmt(abs(-best["beta3"] - best["beta2"]))],
+     fmt(abs(-best["beta3"] + best["beta2"]))],
 
-    ["XI", "-", "", ""],
+    ["XI", "-", "", ""], # IDK WHAT THIS IS OR IF YOU NEED IT ANDREW!
 
     ["M IN", "-", fmt(Mach[0]), fmt(best["M2R"])],
     ["M OUT", "-", fmt(best["M2"]), fmt(best["M3R"])],
