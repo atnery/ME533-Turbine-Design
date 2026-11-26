@@ -22,7 +22,7 @@ OUTPUT_NAMES = [
     "h2_geom", "h3_geom",
     "r_hub2", "r_tip2",
     "r_hub3", "r_tip3",
-    "A1", "AN2_1", "AN2_2", "AN2_3","sol"
+    "A1", "AN2_1", "AN2_2", "AN2_3", "sc_op_s", "sc_opt_r", "sol"
 ]
 
 # Blade geometry NOT supplied by the caller is derived from these ratios (preliminary design values)
@@ -59,6 +59,23 @@ def blade_dim_func(h,r_mean):
     # Function to compute row cross sectional area given blade half height
     return (((r_mean + h)**2 - r_mean**2) + (r_mean**2 - (r_mean - h)**2))*np.pi
 
+def sc_opt_func(angle_in, angle_out):
+    # Implements the Ainley-Mathieson formula for optimal blade s/c ratio
+
+    # NOTE: BLADE ANGLES HERE ARE DEFINED RELATIVE TO TANGENTIAL DIRECTION
+    # FOR ROTORS JUST INPUT BETA 2 and BETA 3
+    # FOR STATORS JUST INPUT ALPHA 1 AND ALPHA 2
+
+    # Computes angles as properly defined for the correlation
+    beta1 = 90 - abs(angle_in)
+    alpha2 = 90 - abs(angle_out)
+
+    sc_0 = 0.427 + alpha2/58 - (alpha2/93)**2
+    sc_1 = 0.224 + (1.575 - alpha2/90)*(alpha2/90)
+    xi = (90 - beta1)/(90 - alpha2)
+    sc_opt = sc_0 + (sc_1 - sc_0)*abs(xi)*xi # Optimum sc_ratio given blade inlet and exit angles
+    return sc_opt
+
 def _evaluate(n_th, T01, P01, P3, reac, U, gamma, R, Cp1, Cp3, T3s, V1, P1, fld,
               mdot, r_mean, geom, loss_select):
     """
@@ -72,9 +89,6 @@ def _evaluate(n_th, T01, P01, P3, reac, U, gamma, R, Cp1, Cp3, T3s, V1, P1, fld,
     V2x = V3x = V1 # Constant axial velocity across blade rows
     W2x = V2x 
     T02 = T01 # Adiabatic stator exit total temperature (K)
-
-    # print(T02)
-    # input("enter")
 
     # Actual work from assumed total-static efficiency (n_th relative to isentropic drop T01 -> T3s)
     T03 = T01 - n_th * (T01 - T3s)
@@ -115,8 +129,13 @@ def _evaluate(n_th, T01, P01, P3, reac, U, gamma, R, Cp1, Cp3, T3s, V1, P1, fld,
         return None
     T2 = T3 + reac * W / Cp_avg # Update T2 based on the converged T3
 
-    # print(T2)
-    # input("enter")
+    sc_opt_1 = sc_opt_func(0,alpha2) # Optimum stator blade pitch / chord ratio
+    geom_s = geom
+    geom_s["s_over_c"] = sc_opt_1
+
+    sc_opt_2 = sc_opt_func(beta2,beta3) # Optimum rotor blade pitch / chord ratio
+    geom_r = geom
+    geom_r["s_over_c"] = sc_opt_2
 
     # ---------------- INNER LOOP: stator exit pressure P2 with KO losses ----------------
     P2 = (P1 + P3)/2  # initial guess
@@ -126,16 +145,10 @@ def _evaluate(n_th, T01, P01, P3, reac, U, gamma, R, Cp1, Cp3, T3s, V1, P1, fld,
         mu2 = PropsSI('V', 'T', T2, 'P', P2, fld) # Viscosity at stator exit
         A2 = mdot / (rho2 * V2x) # Annular flow area at stator exit
 
-        # print(rho2)
-        # print(A2)
-        # input("enter")
-
+        # Stator blade sizing
         residual2 = lambda x: blade_dim_func(x,r_mean) - A2
         sol = root_scalar(residual2,bracket=(0,0.20),method='brentq') # Solves for half height of blade given A2
         h2 = 2*sol.root
-
-        # print(h2)
-        # input("enter")
         
         r_tip2 = r_mean + h2/2
         r_hub2 = r_mean - h2/2
@@ -144,7 +157,7 @@ def _evaluate(n_th, T01, P01, P3, reac, U, gamma, R, Cp1, Cp3, T3s, V1, P1, fld,
         P02_guess = P2 * (T02 / T2) ** g # Stagnation pressure at stator exit (guess)
         Y_s_all = _ko_Y('stator', V1, 0.0, V2, alpha2, P01, P1, P02_guess, P2,
                         T1, T2, rho2, mu2, h2, r_tip2, r_hub2,
-                        gamma, R, geom, 0.0, loss_select) #  KO stator loss coefficient (dh0 unused for a stator)
+                        gamma, R, geom_s, 0.0, loss_select) #  KO stator loss coefficient (dh0 unused for a stator)
         Y_s = Y_s_all[0]
         P02 = (P01 + Y_s * P2) / (1 + Y_s)           # from Y = (P01-P02)/(P02-P2)
         P2_new = P02 / ((T02 / T2) ** g)                # static P2 consistent with actual V2
@@ -165,18 +178,18 @@ def _evaluate(n_th, T01, P01, P3, reac, U, gamma, R, Cp1, Cp3, T3s, V1, P1, fld,
     rho3 = PropsSI('D', 'T', T3, 'P', P3, fld)
     mu3 = PropsSI('V', 'T', T3, 'P', P3, fld)
     A3 = mdot / (rho3 * V3x)
+
+    # Rotor blade sizing
     residual3 = lambda x: blade_dim_func(x,r_mean) - A3
     sol = root_scalar(residual3,bracket=(0,0.20),method='brentq') # Solves for half height of blade given A3
     h3 = 2*sol.root
-    # print(h3)
-    # input("enter")
 
     r_tip3 = r_mean + h3/2
     r_hub3 = r_mean - h3/2
 
     # KO angle convention: inlet CCW+, exit CW+ -> rotor exit relative angle enters with flipped sign
     Y_r_all = _ko_Y('rotor', W2, beta2, W3, -beta3, P02R, P2, P03R_guess, P3,
-                    T2, T3, rho3, mu3, h3, r_tip3, r_hub3, gamma, R, geom, W, loss_select)   # dh0 = rotor work = stage work W
+                    T2, T3, rho3, mu3, h3, r_tip3, r_hub3, gamma, R, geom_r, W, loss_select)   # dh0 = rotor work = stage work W
     Y_r = Y_r_all[0]
     P03R = (P02R + Y_r * P3) / (1 + Y_r)
     P3_calc = P03R / (T03R / T3) ** g                 # exit static pressure implied by losses
@@ -191,7 +204,7 @@ def _evaluate(n_th, T01, P01, P3, reac, U, gamma, R, Cp1, Cp3, T3s, V1, P1, fld,
                 A2=A2, A3=A3, h2=h2, h3=h3, Y_s=Y_s, Y_r=Y_r,
                 alpha2=alpha2, beta2=beta2, beta3=beta3,
                 M2=M2, M2R=M2R, M3=M3, M3R=M3R, T02=T02, alpha3=alpha3,
-                P02R=P02R, T02R=T02R, P03R=P03R, T03R=T03R, Y_s_all=Y_s_all, Y_r_all=Y_r_all)
+                P02R=P02R, T02R=T02R, P03R=P03R, T03R=T03R, Y_s_all=Y_s_all, Y_r_all=Y_r_all,sc_opt_s=sc_opt_1,sc_opt_r=sc_opt_2)
 
 # Function to calculate the exit flow conditions of a single-stage turbine using the Kacker-Okapuu loss model
 
@@ -325,4 +338,4 @@ def single_stage_turbine(T01, P01, P3, mdot_core, mdot_cool, reac, r_mean, U,
             sol['Y_s'], sol['Y_r'], sol['alpha2'], sol['beta2'], sol['beta3'],
             sol['M2'], sol['M2R'], sol['M3'], sol['M3R'],
             sol['P2'], sol['T2'], sol['T3'], sol['P02'], sol['T02'], sol['alpha3'],
-            N_rpm, h2, h3, r_hub2, r_tip2, r_hub3, r_tip3, A1, AN2_1, AN2_2, AN2_3, sol)
+            N_rpm, h2, h3, r_hub2, r_tip2, r_hub3, r_tip3, A1, AN2_1, AN2_2, AN2_3, sol['sc_opt_s'], sol['sc_opt_r'], sol)
