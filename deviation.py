@@ -21,7 +21,7 @@ def gauging_angle(exit_angle, M_exit, P0_exit, P_exit, rho_inlet, rho_exit, Y_TE
     o_s = np.sin(np.radians(Bg))
     F_AR = 0.8 + 0.2 * (rho_exit / rho_inlet)
     F_TE = 1 + Y_TE * (P0_exit - P_exit) / P0_exit
-    o_s_id = o_s / (F_AR * F_TE)
+    o_s_id = o_s / (F_AR * F_TE)    
 
     Bg_blade = 90 - np.degrees(np.arcsin(o_s_id)) # Convert back to axial angle convention
 
