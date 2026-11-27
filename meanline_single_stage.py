@@ -26,7 +26,7 @@ AN2_LIMIT = 3.2e7                               # structural limit on A*N^2 [m^2
 M_inlet = 0.25 # Inlet mach number (arbritrary)
 
 # Target Speed
-U_target = 450 # Target blade rotational speed, m/s
+U_target = 490 # Target blade rotational speed, m/s
 
 ### Computations
 
@@ -53,7 +53,7 @@ output_names = [
     "h2_geom", "h3_geom",
     "r_hub2", "r_tip2",
     "r_hub3", "r_tip3",
-    "A1", "AN2_1", "AN2_2", "AN2_3", "sc_opt_s", "sc_opt_r"
+    "A1", "AN2_1", "AN2_2", "AN2_3", "sc_opt_s", "sc_opt_r", "psi"
 ]
 
 # Preallocate storage
@@ -161,13 +161,13 @@ from CoolProp.CoolProp import PropsSI
 # 1. Identify the highest-efficiency feasible design
 # ---------------------------------------------------------
 
-valid = np.isfinite(results_dict["eta_ts"])
+valid = np.isfinite(results_dict["eta_tt"])
 
 if not np.any(valid):
     raise ValueError("No feasible turbine designs found.")
 
 valid_indices = np.where(valid)[0]
-best_idx = valid_indices[np.argmax(results_dict["eta_ts"][valid])]
+best_idx = valid_indices[np.argmax(results_dict["eta_tt"][valid])]
 
 # Recover the selected design
 best_output = single_stage_turbine(
@@ -183,8 +183,9 @@ best_output = single_stage_turbine(
 
 best = dict(zip(output_names, best_output[:-1]))
 sol = best_output[-1]
-sc_opt_s = best_output[-3]
-sc_opt_r = best_output[-2]
+sc_opt_s = best_output[-4]
+sc_opt_r = best_output[-3]
+psi = best_output[-2]
 
 if not sol:
     raise ValueError("Selected design could not be recomputed.")
@@ -319,6 +320,8 @@ AN2 = [best["AN2_1"], best["AN2_2"], best["AN2_3"]]
 pitch = [chord_s*sc_opt_s,chord_r*sc_opt_r]
 BLADES = [np.ceil(2 * np.pi * r_mean / pitch[0]), np.ceil(2 * np.pi * r_mean / pitch[1])]
 
+
+
 # ---------------------------------------------------------
 # 4. Helper for formatting CSV values
 # ---------------------------------------------------------
@@ -435,7 +438,7 @@ stage_rows = [
 
     ["REACTION", "-", fmt(reaction)],
     ["PHI", "-", fmt(phi)],
-    ["PSI", "-", fmt(W / U_target**2)],
+    ["PSI", "-", fmt(psi)],
 
     ["U", "M/S", fmt(U_target)],
     ["U TIP", "M/S", fmt(U_tip)],
