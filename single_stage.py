@@ -22,7 +22,7 @@ OUTPUT_NAMES = [
     "h2_geom", "h3_geom",
     "r_hub2", "r_tip2",
     "r_hub3", "r_tip3",
-    "A1", "AN2_1", "AN2_2", "AN2_3", "sc_op_s", "sc_opt_r", "sol"
+    "A1", "AN2_1", "AN2_2", "AN2_3", "sc_op_s", "sc_opt_r", "psi", "sol"
 ]
 
 # Blade geometry NOT supplied by the caller is derived from these ratios (preliminary design values)
@@ -200,11 +200,14 @@ def _evaluate(n_th, T01, P01, P3, reac, U, gamma, R, Cp1, Cp3, T3s, V1, P1, fld,
     M2, M2R = V2 / a2, W2 / a2     # stator exit: absolute, relative
     M3, M3R = V3 / a3, W3 / a3     # rotor exit: absolute, relative
 
+    # Stage loading
+    psi = (Cp1*T01 - Cp3*T03)/(U**2)
+
     return dict(T03=T03, W=W, T2=T2, T3=T3, P2=P2, P02=P02, P3_calc=P3_calc,
                 A2=A2, A3=A3, h2=h2, h3=h3, Y_s=Y_s, Y_r=Y_r,
                 alpha2=alpha2, beta2=beta2, beta3=beta3,
                 M2=M2, M2R=M2R, M3=M3, M3R=M3R, T02=T02, alpha3=alpha3,
-                P02R=P02R, T02R=T02R, P03R=P03R, T03R=T03R, Y_s_all=Y_s_all, Y_r_all=Y_r_all,sc_opt_s=sc_opt_1,sc_opt_r=sc_opt_2)
+                P02R=P02R, T02R=T02R, P03R=P03R, T03R=T03R, Y_s_all=Y_s_all, Y_r_all=Y_r_all,sc_opt_s=sc_opt_1,sc_opt_r=sc_opt_2,psi=psi)
 
 # Function to calculate the exit flow conditions of a single-stage turbine using the Kacker-Okapuu loss model
 
@@ -338,4 +341,4 @@ def single_stage_turbine(T01, P01, P3, mdot_core, mdot_cool, reac, r_mean, U,
             sol['Y_s'], sol['Y_r'], sol['alpha2'], sol['beta2'], sol['beta3'],
             sol['M2'], sol['M2R'], sol['M3'], sol['M3R'],
             sol['P2'], sol['T2'], sol['T3'], sol['P02'], sol['T02'], sol['alpha3'],
-            N_rpm, h2, h3, r_hub2, r_tip2, r_hub3, r_tip3, A1, AN2_1, AN2_2, AN2_3, sol['sc_opt_s'], sol['sc_opt_r'], sol)
+            N_rpm, h2, h3, r_hub2, r_tip2, r_hub3, r_tip3, A1, AN2_1, AN2_2, AN2_3, sol['sc_opt_s'], sol['sc_opt_r'], sol['psi'], sol)
