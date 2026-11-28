@@ -13,6 +13,16 @@ def props(T, P, fluid):
     R = PropsSI('gas_constant', fluid) / PropsSI('molar_mass', fluid)
     return cp, gamma, R
 
+def solidity(inlet_angle, exit_angle):
+    inlet_angle = 90 - abs(inlet_angle)
+    exit_angle = 90 - abs(exit_angle)
+    s_c_0 = 0.427 + exit_angle / 58 - (exit_angle / 93)**2
+    s_c_1 = 0.224 + (1.575 - exit_angle / 90) * exit_angle / 90
+    zeta = (90 - inlet_angle) / (90 - exit_angle)
+    s_c_opt = s_c_0 + (s_c_1 - s_c_0) * np.abs(zeta) * zeta
+
+    return s_c_opt
+
 def two_stage_contra(phi1, psi1, R1, R2, exit_swirl, rpm1, geom, T01, P01, mdot, P01_Pe, fluid, angles_only=False):
     # Unpack geometry
     h_c, tmax_c, ax_c, clr_h, shrouded, t_o = geom

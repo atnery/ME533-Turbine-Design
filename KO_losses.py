@@ -134,7 +134,8 @@ def ko_losses(V, G, F, B, E, loss_select):
         if b_type == "rotor":
             fHub = 1 + 6.0979 * max(0.9425 - rh_rt, 0.0) ** 2 # Fig. 6 fit
         else:
-            fHub = 1 + 3.6491 * max(0.7723 - rh_rt, 0.0) ** 1.6809
+           # fHub = 1 + 3.6491 * max(0.7723 - rh_rt, 0.0) ** 1.6809
+           fHub = 1
         shockTerm = 0.75 * max(fHub * M_in - 0.40, 0.0) ** 1.75
         if shockTerm > 0:
             qIn = in_p0 - in_p
